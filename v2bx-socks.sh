@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.0 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.1 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.0.1
+VERSION=2.1.0
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false TTY_MODE=''
 CONFIG_PATH='' WORK_DIR='' BACKUP_ROOT=''
@@ -446,6 +446,88 @@ restore_menu() {
     TX_ARMED=false
     if service_start_check; then say '备份已恢复，服务已运行。'; else say '备份已恢复，但原服务未正常运行，请检查面板和节点。'; fi
 }
+show_socks_config() {
+    local count i selection kind node_tag tag out_path route_path
+    count=$(jq -er '.Nodes | if type=="array" then length else error("nodes") end' "$CONFIG_PATH" 2>/dev/null) || {
+        fail '无法读取节点列表。'; return 1;
+    }
+    say '当前 SOCKS 出口配置（密码隐藏）'
+    if [[ $count == 0 ]]; then say '暂无节点。'; return 0; fi
+    for ((i=0;i<count;i++)); do
+        say ''
+        jq -r --argjson n "$i" '
+          def text: if type=="string" or type=="number" then tostring|gsub("[\\x00-\\x1f\\x7f]";" ") else "未知" end;
+          .Nodes[$n] | "节点 ID \(.NodeID|text) · \(.NodeType|text) · 内核 \(.Core|text)"
+        ' "$CONFIG_PATH" 2>/dev/null || return 1
+        selection=$(jq -ce --argjson n "$i" '
+          .Nodes[$n] as $node |
+          [.Cores[]|select((if (.Name // "")=="" then .Type else .Name end)==$node.Core)] as $cores |
+          if ($cores|length)!=1 then error("core") else $cores[0] as $core |
+          {kind:$core.Type,
+           tag:(if ($node.Name // "")!="" then $node.Name else "["+$node.ApiHost+"]-"+($node.NodeType|ascii_downcase)+":"+($node.NodeID|tostring) end),
+           out:(if $core.Type=="sing" then $core.OriginalPath else $core.OutboundConfigPath end),
+           route:(if $core.Type=="sing" then $core.OriginalPath else $core.RouteConfigPath end)} end
+        ' "$CONFIG_PATH" 2>/dev/null) || { say '  无法读取：节点或内核标识不明确。'; continue; }
+        kind=$(printf '%s' "$selection" | jq -r '.kind')
+        [[ $kind == xray || $kind == sing ]] || { say '  暂不支持查看此内核的 SOCKS 配置。'; continue; }
+        out_path=$(printf '%s' "$selection" | jq -r '.out // ""')
+        route_path=$(printf '%s' "$selection" | jq -r '.route // ""')
+        if [[ -z $out_path || -z $route_path ]]; then
+            say '  无法读取：内核没有配置出站或路由文件路径。'; continue
+        fi
+        [[ $out_path == /* ]] || out_path="$WORK_DIR/$out_path"
+        [[ $route_path == /* ]] || route_path="$WORK_DIR/$route_path"
+        if ! safe_path "$out_path" || ! valid_json "$out_path" || ! safe_path "$route_path" || ! valid_json "$route_path"; then
+            say '  无法读取：出站或路由文件缺失，或不是普通标准 JSON 文件。'; continue
+        fi
+        node_tag=$(printf '%s' "$selection" | jq -r '.tag')
+        tag="v2bx-socks-$(printf '%s' "$node_tag" | hash_text)"
+        # Read source files directly. Passwords and API keys never enter command arguments or output.
+        if ! jq -nr --slurpfile config "$CONFIG_PATH" --slurpfile out "$out_path" --slurpfile route "$route_path" \
+            --argjson n "$i" --arg kind "$kind" --arg tag "$tag" "$(socks_view_filter)" 2>/dev/null; then
+            say '  无法读取：出站或路由配置格式异常。'
+        fi
+    done
+    say ''
+    say '以上为当前文件中保存的设置；查看不会测试连通性。可用菜单 2 测试 SOCKS。'
+}
+socks_view_filter() {
+cat <<'JQ'
+def text: if type=="string" or type=="number" then tostring|gsub("[\\x00-\\x1f\\x7f]";" ") else "未设置" end;
+($kind=="sing") as $sing | $config[0].Nodes[$n] as $node |
+(if ($node.Name // "")!="" then $node.Name else "["+$node.ApiHost+"]-"+($node.NodeType|ascii_downcase)+":"+($node.NodeID|tostring) end) as $in |
+(if $sing then ($out[0].outbounds // []) else $out[0] end) as $outs |
+(if $sing then ($route[0].route.rules // []) else ($route[0].rules // []) end) as $rules |
+if ($outs|type)!="array" or ($rules|type)!="array" then error("format") else
+[$outs[] | select(.tag==$tag)] as $matches |
+if ($matches|length)==0 then
+  "  未找到本助手为此节点配置的 SOCKS 出口。",
+  (if any($outs[]; (.protocol // .type)=="socks") then "  此内核还有其他 SOCKS 出站，可能属于其他节点或自定义分流。" else empty end)
+elif ($matches|length)!=1 then "  出站标识重复，无法确定此节点的 SOCKS 配置。"
+else $matches[0] as $proxy |
+if ($proxy.protocol // $proxy.type)!="socks" then "  原节点出站已被修改为非 SOCKS 类型，请检查配置。" else
+(if $sing then {inbound:[$in],action:"route",outbound:$tag}
+ else {type:"field",inboundTag:[$in],network:"tcp,udp",outboundTag:$tag} end) as $expected |
+([$rules|to_entries[]|select(.value==$expected)|.key][0] // -1) as $route_at |
+(if $sing then {inbound:[$in],network:"udp",action:"reject"}
+ else {type:"field",inboundTag:[$in],network:"udp",outboundTag:($tag+"-udp")} end) as $blocked |
+([$rules|to_entries[]|select(.value==$blocked)|.key][0] // -1) as $block_at |
+(if $sing then true else any($outs[]; .tag==($tag+"-udp") and .protocol=="blackhole") end) as $block_exists |
+"  路由：" + (if $route_at>=0 then "已找到节点专用规则（其他分流规则仍可能影响流量）"
+ else "未找到标准节点规则，出站虽已保存但是否使用需检查路由" end),
+"  UDP：" + (if $route_at<0 then "无法确认，请检查路由"
+ elif ($block_at>=0 and $block_at<$route_at and $block_exists) or ($sing and $proxy.network=="tcp") then "阻断，仅使用 TCP"
+ else "允许（尚未验证 SOCKS 的 UDP 可用性）" end),
+(if $sing then [{address:$proxy.server,port:$proxy.server_port,users:
+   (if ($proxy.username // "")=="" and ($proxy.password // "")=="" then [] else [{user:$proxy.username,pass:$proxy.password}] end)}]
+ else ($proxy.settings.servers // []) end) as $servers |
+if ($servers|length)==0 then "  SOCKS 服务器地址未配置。" else
+$servers[] | "  SOCKS 地址：\(.address|text)", "  端口：\(.port|text)",
+(if ((.users // [])|length)==0 then "  认证：无账号 / IP 白名单" else
+ .users[] | "  用户名：\(.user|text)", "  密码：" + (if (.pass // "")=="" then "未设置" else "******（已设置）" end) end)
+end end end end
+JQ
+}
 show_status() {
     local state
     state=$(service_state) || return 1
@@ -494,19 +576,20 @@ cleanup() {
 }
 help_text() {
     cat <<'HELP'
-V2bX 中文 SOCKS 出口助手 2.0（轻量版）
+V2bX 中文 SOCKS 出口助手 2.1（轻量版）
 安装后使用：v2bx-socks
 只读查看：v2bx-socks --status
+查看 SOCKS 配置：v2bx-socks --show-socks（密码隐藏）
 手动上传脚本后使用：bash v2bx-socks.sh
 依赖：Bash、jq、curl，以及 Linux 自带的 systemd/coreutils 工具。
-菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态。
+菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态、查看 SOCKS 配置。
 确认保存才修改出站；生效时短暂重启整个 V2bX 服务。
 无需 Python，不会安装、升级或重装 V2bX。
 HELP
 }
 main() {
     local item missing=() choice
-    case ${1:-} in --help|-h) help_text; return 0;; --version) say "$VERSION"; return 0;; ''|--status) ;; *) help_text; return 1;; esac
+    case ${1:-} in --help|-h) help_text; return 0;; --version) say "$VERSION"; return 0;; ''|--status|--show-socks) ;; *) help_text; return 1;; esac
     [[ $EUID == 0 ]] || { fail '请使用 root 用户运行。'; return 1; }
     for item in systemctl ss flock sha256sum stat sync; do command -v "$item" >/dev/null 2>&1 || { fail "缺少系统工具：$item"; return 1; }; done
     for item in jq curl; do command -v "$item" >/dev/null 2>&1 || missing+=("$item"); done
@@ -523,6 +606,7 @@ main() {
     fi
     discover || return 1
     if [[ ${1:-} == --status ]]; then show_status; return $?; fi
+    if [[ ${1:-} == --show-socks ]]; then show_socks_config; return $?; fi
     umask 077
     TASK_DIR=$(mktemp -d /tmp/v2bx-socks.XXXXXX) || return 1
     trap cleanup EXIT
@@ -538,11 +622,12 @@ main() {
         say '2. 只测试 SOCKS（不改配置）'
         say '3. 恢复修改前的配置'
         say '4. 查看节点与服务状态'
+        say '5. 查看 SOCKS 出口配置'
         say '0. 退出'
         ask '请选择' 0 || return 1; choice=$REPLY
         case $choice in
             0) return 0;; 1) configure_menu || true;; 2) ask_endpoint || true;;
-            3) restore_menu || true;; 4) show_status || true;; *) say '请输入菜单中的数字。';;
+            3) restore_menu || true;; 4) show_status || true;; 5) show_socks_config || true;; *) say '请输入菜单中的数字。';;
         esac
     done
 }
