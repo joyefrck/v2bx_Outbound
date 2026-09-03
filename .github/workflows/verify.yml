@@ -1,0 +1,33 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq curl
+      - name: Check scripts and release files
+        run: |
+          bash -n install.sh
+          bash -n build.sh
+          bash -n src/helper.sh
+          bash -n v2bx-socks.sh
+          bash build.sh
+          git diff --exit-code -- v2bx-socks.sh SHA256SUMS
+          sha256sum --check SHA256SUMS
+          bash install.sh --help
+          bash v2bx-socks.sh --help
+      - name: Test routing, rollback, terminal and installer
+        run: python3 -m unittest discover -s tests -v
