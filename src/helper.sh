@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.1 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.2 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.1.0
+VERSION=2.2.0
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false TTY_MODE=''
 CONFIG_PATH='' WORK_DIR='' BACKUP_ROOT=''
 FILES=()
+SELF_PATH='' RELOAD_HELPER=false
 
 say() { printf '%s\n' "$*"; }
 fail() { printf '未完成：%s\n' "$*" >&2; return 1; }
@@ -564,6 +565,89 @@ configure_menu() {
     apply_candidate
 }
 
+update_fetch() {
+    curl -q --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+        --connect-timeout 10 --max-time 45 --retry 1 --output "$2" "$1"
+}
+valid_version() { [[ $1 =~ ^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$ ]]; }
+compare_versions() {
+    local i a b left=() right=()
+    valid_version "$1" && valid_version "$2" || return 1
+    IFS=. read -r -a left <<< "$1"
+    IFS=. read -r -a right <<< "$2"
+    for ((i=0;i<3;i++)); do
+        a=$((10#${left[$i]})); b=$((10#${right[$i]}))
+        if ((a>b)); then say 1; return 0; fi
+        if ((a<b)); then say -1; return 0; fi
+    done
+    say 0
+}
+update_helper() {
+    local current_sha commit base expected actual latest comparison backup mode file_uid file_gid disk_version
+    RELOAD_HELPER=false
+    [[ -d $TASK_DIR && -f $SELF_PATH && ! -L $SELF_PATH ]] || {
+        fail '请先将助手安装或保存为普通脚本文件，再从菜单更新。'; return 1;
+    }
+    if [[ $TX_ARMED == true && -n $TX_DIR ]]; then
+        fail '存在未完成的配置操作，请先恢复后再更新助手。'; return 1
+    fi
+    disk_version=$(sed -n 's/^VERSION=//p' "$SELF_PATH")
+    [[ $disk_version == "$VERSION" ]] || { fail '助手文件已被其他操作修改，请退出菜单后重新运行。'; return 1; }
+    current_sha=$(hash_file "$SELF_PATH") || return 1
+    say "当前版本：$VERSION"
+    say '正在检查 GitHub 上的助手更新……'
+    if ! update_fetch 'https://api.github.com/repos/joyefrck/v2bx_Outbound/git/ref/heads/main' "$TASK_DIR/update-head.json"; then
+        fail '无法检查更新，请检查 GitHub 连接或稍后重试。当前助手保持不变。'; return 1
+    fi
+    commit=$(jq -er '.object.sha | select(type=="string" and test("^[0-9a-f]{40}$"))' "$TASK_DIR/update-head.json" 2>/dev/null) || {
+        fail 'GitHub 返回的版本信息无效，当前助手保持不变。'; return 1;
+    }
+    # Fetch both artifacts from one immutable commit, avoiding inconsistent branch caches.
+    base="https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/$commit"
+    if ! update_fetch "$base/v2bx-socks.sh" "$TASK_DIR/update-script" ||
+       ! update_fetch "$base/SHA256SUMS" "$TASK_DIR/update-checksums"; then
+        fail '下载失败，当前助手保持不变。'; return 1
+    fi
+    expected=$(awk '$2=="v2bx-socks.sh" && NF==2 {print $1}' "$TASK_DIR/update-checksums") || return 1
+    actual=$(hash_file "$TASK_DIR/update-script") || return 1
+    [[ $expected =~ ^[0-9a-f]{64}$ && $expected == "$actual" ]] || {
+        fail '更新文件校验失败，当前助手保持不变。'; return 1;
+    }
+    bash -n "$TASK_DIR/update-script" 2>/dev/null || { fail '更新文件语法检查失败，当前助手保持不变。'; return 1; }
+    head -n 2 "$TASK_DIR/update-script" | grep -Fq '# V2bX SOCKS Helper ' || { fail '下载内容不是本助手。'; return 1; }
+    # Parse the literal version; do not run downloaded code before confirmation.
+    latest=$(sed -n 's/^VERSION=//p' "$TASK_DIR/update-script")
+    valid_version "$latest" || { fail '更新文件的版本号格式无效。'; return 1; }
+    comparison=$(compare_versions "$latest" "$VERSION") || return 1
+    say "仓库版本：$latest"
+    if [[ $comparison == -1 ]]; then say '仓库版本低于当前版本，保持当前版本，不降级。'; return 0; fi
+    if [[ $comparison == 0 && $current_sha == "$actual" ]]; then
+        say "当前已是最新版本（${VERSION}）。"; return 0
+    fi
+    [[ $comparison != 0 ]] || say '版本号相同，但文件内容有更新。'
+    say '更新前备份助手文件，保留现有 SOCKS 配置和备份；更新完成后重新打开菜单。'
+    confirm '更新助手' || { say '已取消更新。'; return 0; }
+    [[ $(hash_file "$SELF_PATH") == "$current_sha" ]] || { fail '助手文件已被其他操作修改，请重新运行后再检查更新。'; return 1; }
+    read -r mode file_uid file_gid < <(metadata "$SELF_PATH")
+    [[ $mode =~ ^[0-7]+$ && $file_uid =~ ^[0-9]+$ && $file_gid =~ ^[0-9]+$ ]] || return 1
+    backup="$SELF_PATH.bak-$VERSION-${current_sha:0:12}"
+    if [[ -e $backup || -L $backup ]]; then
+        [[ $(hash_file "$backup") == "$current_sha" ]] || { fail '助手备份文件冲突，未更新。'; return 1; }
+    else
+        atomic_copy "$SELF_PATH" "$backup" "$mode" "$file_uid:$file_gid" || { fail '无法备份当前助手，未更新。'; return 1; }
+    fi
+    [[ $(hash_file "$SELF_PATH") == "$current_sha" ]] || { fail '助手文件已被其他操作修改，未覆盖。'; return 1; }
+    if ! atomic_copy "$TASK_DIR/update-script" "$SELF_PATH" "$mode" "$file_uid:$file_gid"; then
+        if [[ $(hash_file "$SELF_PATH") == "$actual" ]]; then
+            atomic_copy "$backup" "$SELF_PATH" "$mode" "$file_uid:$file_gid" || true
+        fi
+        fail "写入更新未完成，原助手备份：$backup"; return 1
+    fi
+    [[ $(hash_file "$SELF_PATH") == "$actual" ]] || { fail "更新后校验失败，原助手备份：$backup"; return 1; }
+    say "已更新到 ${latest}。原助手备份：$backup"
+    RELOAD_HELPER=true
+}
+
 cleanup() {
     local code=$?
     trap - EXIT
@@ -572,17 +656,24 @@ cleanup() {
     if [[ $TX_ARMED == true && -n $TX_DIR ]]; then rollback || true; fi
     [[ -z $ATOMIC_TMP ]] || rm -f "$ATOMIC_TMP"
     if [[ -n $TASK_DIR && $TASK_DIR == */v2bx-socks.* && -d $TASK_DIR ]]; then rm -rf "$TASK_DIR"; fi
+    if [[ $code == 0 && $RELOAD_HELPER == true ]]; then
+        say '正在重新打开新版菜单……'
+        exec 8>&- 9>&-
+        trap - INT TERM HUP
+        exec bash "$SELF_PATH"
+    fi
     exit "$code"
 }
 help_text() {
     cat <<'HELP'
-V2bX 中文 SOCKS 出口助手 2.1（轻量版）
+V2bX 中文 SOCKS 出口助手 2.2（轻量版）
 安装后使用：v2bx-socks
 只读查看：v2bx-socks --status
 查看 SOCKS 配置：v2bx-socks --show-socks（密码隐藏）
 手动上传脚本后使用：bash v2bx-socks.sh
 依赖：Bash、jq、curl，以及 Linux 自带的 systemd/coreutils 工具。
-菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态、查看 SOCKS 配置。
+菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态、查看 SOCKS 配置、检查 / 更新助手。
+菜单 6 可检查 GitHub 更新，确认后备份并更新助手，不重启 V2bX。
 确认保存才修改出站；生效时短暂重启整个 V2bX 服务。
 无需 Python，不会安装、升级或重装 V2bX。
 HELP
@@ -607,6 +698,7 @@ main() {
     discover || return 1
     if [[ ${1:-} == --status ]]; then show_status; return $?; fi
     if [[ ${1:-} == --show-socks ]]; then show_socks_config; return $?; fi
+    SELF_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
     umask 077
     TASK_DIR=$(mktemp -d /tmp/v2bx-socks.XXXXXX) || return 1
     trap cleanup EXIT
@@ -617,17 +709,20 @@ main() {
     exec 8>"${CONFIG_PATH%/*}/.v2bx-socks.lock" || return 1
     flock -n 8 || { fail '另一个出口助手正在运行，请先关闭它。'; return 1; }
     while true; do
-        say ''; say "V2bX SOCKS 出口助手 $VERSION（轻量版）"
+        say ''; say "V2bX SOCKS 出口助手 ${VERSION}（轻量版）"
         say '1. 配置 / 更换一个节点的 SOCKS 出口'
         say '2. 只测试 SOCKS（不改配置）'
         say '3. 恢复修改前的配置'
         say '4. 查看节点与服务状态'
         say '5. 查看 SOCKS 出口配置'
+        say '6. 检查 / 更新助手'
         say '0. 退出'
         ask '请选择' 0 || return 1; choice=$REPLY
         case $choice in
             0) return 0;; 1) configure_menu || true;; 2) ask_endpoint || true;;
-            3) restore_menu || true;; 4) show_status || true;; 5) show_socks_config || true;; *) say '请输入菜单中的数字。';;
+            3) restore_menu || true;; 4) show_status || true;; 5) show_socks_config || true;;
+            6) if update_helper && [[ $RELOAD_HELPER == true ]]; then return 0; fi;;
+            *) say '请输入菜单中的数字。';;
         esac
     done
 }
