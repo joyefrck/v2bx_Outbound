@@ -2,7 +2,7 @@
 # V2bX SOCKS Helper 2.0 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.0.0
+VERSION=2.0.1
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false TTY_MODE=''
 CONFIG_PATH='' WORK_DIR='' BACKUP_ROOT=''
@@ -495,8 +495,9 @@ cleanup() {
 help_text() {
     cat <<'HELP'
 V2bX 中文 SOCKS 出口助手 2.0（轻量版）
-使用：bash v2bx-socks.sh
-只读查看：bash v2bx-socks.sh --status
+安装后使用：v2bx-socks
+只读查看：v2bx-socks --status
+手动上传脚本后使用：bash v2bx-socks.sh
 依赖：Bash、jq、curl，以及 Linux 自带的 systemd/coreutils 工具。
 菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态。
 确认保存才修改出站；生效时短暂重启整个 V2bX 服务。

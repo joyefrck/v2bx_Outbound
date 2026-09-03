@@ -12,5 +12,7 @@
 - [x] 更新 README，提供 curl/wget 安装命令、`v2bx-socks` 菜单入口、更新说明及支持范围。
 - [x] 新增安装器测试；运行 `python3 -m unittest discover -s tests -v`，原测试和安装场景均须通过。
 - [x] 配置 Linux CI，执行 Bash 语法检查、构建差异检查和全部测试。
-- [ ] 检查待提交文件不含生产信息，提交推送 `main`；确认远端 SHA 与本地一致。
-- [ ] 等待 CI，通过公开 URL 下载脚本并在临时 Linux 容器中安装，检查已安装命令 `--help`、`--version`。
+- [x] 检查待提交文件不含生产信息，提交推送 `main`；确认远端 SHA 与本地一致。
+- [x] 等待 CI，通过公开 URL 下载脚本并在临时 Linux 容器中安装，检查已安装命令 `--help`、`--version`。
+
+发布验证记录：本地 30 项测试通过，初次发布的 GitHub Actions 运行 `33727760518` 通过。Debian 12 临时容器没有 Python，通过公开 GitHub 地址完成 curl 安装、重复更新和仅有 wget 的下载回退，已安装命令可以显示版本与帮助，SHA256 与公开清单一致。测试容器退出后自动删除。
