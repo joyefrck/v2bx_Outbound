@@ -31,3 +31,5 @@ jobs:
           bash v2bx-socks.sh --help
       - name: Test routing, rollback, terminal and installer
         run: python3 -m unittest discover -s tests -v
+      - name: Verify detached worker with real systemd and simulated SSH hangup
+        run: sudo env V2BX_SYSTEMD_TEST=1 python3 -m unittest discover -s tests -p test_jobs.py -v

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.2 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.3 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.2.0
+VERSION=2.3.0
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false TTY_MODE=''
 CONFIG_PATH='' WORK_DIR='' BACKUP_ROOT=''
 FILES=()
 SELF_PATH='' RELOAD_HELPER=false
+JOB_DIR='' BACKGROUND_SUBMITTED=false
 
 say() { printf '%s\n' "$*"; }
 fail() { printf '未完成：%s\n' "$*" >&2; return 1; }
@@ -435,6 +436,10 @@ restore_menu() {
     [[ $status == applied ]] || interrupted=true
     if ! restore_check "$interrupted"; then TX_DIR=''; return 1; fi
     if ! confirm '恢复此备份并短暂重启整个 V2bX 服务'; then TX_DIR=''; return 0; fi
+    submit_job restore
+}
+restore_candidate() {
+    local interrupted=${1:-false}
     TX_ARMED=true
     if ! service_stop; then TX_DIR=''; return 1; fi
     if ! restore_check "$interrupted"; then service_start_check || true; TX_DIR=''; return 1; fi
@@ -445,7 +450,7 @@ restore_menu() {
     fi
     TX_DIR=''
     TX_ARMED=false
-    if service_start_check; then say '备份已恢复，服务已运行。'; else say '备份已恢复，但原服务未正常运行，请检查面板和节点。'; fi
+    if service_start_check; then say '备份已恢复，服务已运行。'; else say '备份已恢复，但原服务未正常运行，请检查面板和节点。'; return 1; fi
 }
 show_socks_config() {
     local count i selection kind node_tag tag out_path route_path
@@ -561,8 +566,151 @@ configure_menu() {
     say '普通 SOCKS 不加密；如服务商提供加密隧道，请通过隧道接入。'
     confirm '确认备份、保存并生效' || { say '已取消，未修改配置。'; return 0; }
     healthy 0 || { fail '现有服务状态已变化，请先检查。'; return 1; }
-    say '正在备份、应用并检查服务，请勿关闭窗口……'
-    apply_candidate
+    say '正在提交后台任务，提交成功后 SSH 断开也会继续执行……'
+    submit_job apply
+}
+
+# systemd owns the worker, so disconnecting the terminal cannot cancel the transaction.
+prepare_job() {
+    local action=$1 root=${CONFIG_PATH%/*}/socks-helper-jobs unit files
+    JOB_DIR=''
+    [[ $action == apply || $action == restore ]] || return 1
+    [[ ! -L $root ]] || return 1
+    mkdir -p "$root" && chmod 700 "$root" || return 1
+    JOB_DIR=$(mktemp -d "$root/job-$(date +%Y%m%d-%H%M%S)-XXXXXX") || return 1
+    chmod 700 "$JOB_DIR" || return 1
+    mkdir -m 700 "$JOB_DIR/v2bx-socks.work" || return 1
+    cp -R "$TASK_DIR/." "$JOB_DIR/v2bx-socks.work/" || return 1
+    cp "$SELF_PATH" "$JOB_DIR/v2bx-socks.work/helper.sh" || return 1
+    chmod 600 "$JOB_DIR/v2bx-socks.work/helper.sh" || return 1
+    unit="v2bx-socks-${JOB_DIR##*/}"
+    files=$(printf '%s\n' "${FILES[@]}" | jq -Rsc 'split("\n")|map(select(length>0))') || return 1
+    jq -n --arg action "$action" --arg config "$CONFIG_PATH" --arg sha "$(hash_file "$CONFIG_PATH")" \
+        --arg work "$WORK_DIR" --arg backup "$BACKUP_ROOT" --arg tx "$TX_DIR" \
+        --arg candidate_sha "${CONFIG_SHA:-}" --arg unit "$unit" --argjson files "$files" \
+        '{action:$action,config:$config,sha:$sha,work:$work,backup:$backup,transaction:$tx,
+          candidate_sha:$candidate_sha,unit:$unit,files:$files}' > "$JOB_DIR/job.json" || return 1
+    chmod 600 "$JOB_DIR/job.json"
+}
+job_result() {
+    jq -n --arg status "$1" --argjson code "$2" '{status:$status,exit_code:$code}' > "$JOB_DIR/result.next" &&
+        atomic_copy "$JOB_DIR/result.next" "$JOB_DIR/result.json"
+}
+job_active() {
+    local unit state
+    unit=$(jq -er '.unit' "$1/job.json" 2>/dev/null) || return 1
+    [[ $unit =~ ^v2bx-socks-job-[A-Za-z0-9-]+$ ]] || return 1
+    state=$(systemctl show "$unit.service" --property=ActiveState --value 2>/dev/null) || return 1
+    [[ $state == active || $state == activating || $state == deactivating ]]
+}
+show_job() {
+    local dir=$1 status
+    say "后台任务：${dir##*/}"
+    if [[ -f $dir/result.json ]]; then
+        status=$(jq -r '.status' "$dir/result.json")
+        if [[ $status == succeeded ]]; then say '结果：已完成。'; else say '结果：未成功，请检查下面的结果及服务状态。'; fi
+        [[ ! -f $dir/output.log ]] || cat "$dir/output.log"
+    elif job_active "$dir"; then
+        say '结果：正在后台处理。SSH 断开不影响任务，请稍后运行 v2bx-socks --last-job。'
+    else
+        say '结果：未确认完成，任务可能未启动或被中断。请查看服务状态；如有未完成备份，用菜单 3 恢复。'
+    fi
+}
+show_last_job() {
+    local dir latest='' root=${CONFIG_PATH%/*}/socks-helper-jobs
+    for dir in "$root"/job-*; do [[ ! -f $dir/job.json ]] || latest=$dir; done
+    if [[ -n $latest ]]; then show_job "$latest"; else say '暂无后台任务记录。'; fi
+}
+check_running_jobs() {
+    local dir root=${CONFIG_PATH%/*}/socks-helper-jobs
+    for dir in "$root"/job-*; do
+        [[ -f $dir/job.json && ! -f $dir/result.json ]] || continue
+        if job_active "$dir"; then show_job "$dir"; return 1; fi
+    done
+}
+submit_job() {
+    local action=$1 unit
+    command -v systemd-run >/dev/null 2>&1 || { fail '缺少 systemd-run，未修改配置。'; return 1; }
+    if ! prepare_job "$action"; then
+        [[ -z $JOB_DIR ]] || rm -rf "$JOB_DIR/v2bx-socks.work"
+        fail '无法准备后台任务，未修改配置。'; return 1
+    fi
+    unit=$(jq -er '.unit' "$JOB_DIR/job.json") || return 1
+    # --pipe/--pty/--scope would tie execution to the SSH client. Do not use them.
+    if ! systemd-run --quiet --collect --unit="$unit" --property=Type=exec \
+        --property=RuntimeMaxSec=180 --property=TimeoutStopSec=60 \
+        /bin/bash "$JOB_DIR/v2bx-socks.work/helper.sh" --worker "$JOB_DIR" \
+        > "$JOB_DIR/launch.log" 2>&1; then
+        # A lost reply does not imply that systemd rejected the start request.
+        if ! job_active "$JOB_DIR" && [[ ! -f $JOB_DIR/result.json ]]; then
+            job_result failed 1 || true
+            rm -rf "$JOB_DIR/v2bx-socks.work"
+            fail '后台任务启动失败，未修改配置。'; return 1
+        fi
+    fi
+    BACKGROUND_SUBMITTED=true
+    TX_ARMED=false; TX_DIR=''
+    exec 8>&-
+    say '已交给后台处理；SSH 断开后无需重复填写，重新登录可查看结果。'
+    say '查询命令：v2bx-socks --last-job'
+}
+wait_job() {
+    local i
+    for ((i=0;i<100;i++)); do
+        if [[ -f $JOB_DIR/result.json ]]; then show_job "$JOB_DIR"; return 0; fi
+        sleep 1
+    done
+    show_job "$JOB_DIR"
+}
+job_cleanup() {
+    local code=$?
+    trap - EXIT
+    trap '' INT TERM HUP
+    if [[ $TX_ARMED == true && -n $TX_DIR ]]; then rollback || code=1; fi
+    job_result "$([[ $code == 0 ]] && printf succeeded || printf failed)" "$code" || true
+    (exit "$code")
+    cleanup
+}
+job_worker() {
+    local state action file expected actual_config interrupted=false
+    JOB_DIR=$1
+    # Only root-private job bundles produced by this helper can supply worker input.
+    [[ -d $JOB_DIR && ! -L $JOB_DIR && -O $JOB_DIR ]] || return 1
+    [[ $(metadata "$JOB_DIR" | cut -d ' ' -f 1) == 700 ]] || return 1
+    safe_path "$JOB_DIR/job.json" && valid_json "$JOB_DIR/job.json" || return 1
+    umask 077
+    exec > "$JOB_DIR/output.log" 2>&1
+    TASK_DIR="$JOB_DIR/v2bx-socks.work"
+    [[ -d $TASK_DIR && ! -L $TASK_DIR ]] || return 1
+    trap job_cleanup EXIT
+    trap 'exit 143' TERM HUP
+    trap 'exit 130' INT
+    state="$JOB_DIR/job.json"
+    CONFIG_PATH=$(jq -er '.config' "$state") || return 1
+    safe_path "$CONFIG_PATH" || return 1
+    [[ ${JOB_DIR%/*} == "${CONFIG_PATH%/*}/socks-helper-jobs" ]] || return 1
+    [[ ! -L ${CONFIG_PATH%/*}/.v2bx-socks.lock ]] || return 1
+    exec 8>"${CONFIG_PATH%/*}/.v2bx-socks.lock" || return 1
+    flock -w 20 8 || { fail '无法取得配置锁，未应用配置。'; return 1; }
+    expected=$(jq -er '.sha' "$state") || return 1
+    [[ $(hash_file "$CONFIG_PATH") == "$expected" ]] || { fail '主配置在提交后发生变化，未应用配置。'; return 1; }
+    actual_config=$CONFIG_PATH
+    discover || return 1
+    [[ $CONFIG_PATH == "$actual_config" ]] || { fail '服务配置路径发生变化，未应用配置。'; return 1; }
+    CONFIG_SHA=$(jq -r '.candidate_sha' "$state") || return 1
+    FILES=()
+    while IFS= read -r file; do FILES+=("$file"); done < <(jq -r '.files[]' "$state")
+    action=$(jq -er '.action' "$state") || return 1
+    case $action in
+        apply) pending_check && healthy 0 && apply_candidate ;;
+        restore)
+            TX_DIR=$(jq -er '.transaction' "$state") || return 1
+            [[ ${TX_DIR%/*} == "$BACKUP_ROOT" ]] || return 1
+            [[ $(jq -r '.status' "$TX_DIR/manifest.json") == applied ]] || interrupted=true
+            restore_check "$interrupted" && restore_candidate "$interrupted"
+            ;;
+        *) fail '未知后台任务动作。'; return 1 ;;
+    esac
 }
 
 update_fetch() {
@@ -666,7 +814,7 @@ cleanup() {
 }
 help_text() {
     cat <<'HELP'
-V2bX 中文 SOCKS 出口助手 2.2（轻量版）
+V2bX 中文 SOCKS 出口助手 2.3（轻量版）
 安装后使用：v2bx-socks
 只读查看：v2bx-socks --status
 查看 SOCKS 配置：v2bx-socks --show-socks（密码隐藏）
@@ -674,13 +822,15 @@ V2bX 中文 SOCKS 出口助手 2.2（轻量版）
 依赖：Bash、jq、curl，以及 Linux 自带的 systemd/coreutils 工具。
 菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态、查看 SOCKS 配置、检查 / 更新助手。
 菜单 6 可检查 GitHub 更新，确认后备份并更新助手，不重启 V2bX。
-确认保存才修改出站；生效时短暂重启整个 V2bX 服务。
+确认保存后由独立后台任务应用；SSH 断开后仍继续执行。
+查看最近任务：v2bx-socks --last-job；生效时短暂重启整个 V2bX 服务。
 无需 Python，不会安装、升级或重装 V2bX。
 HELP
 }
 main() {
     local item missing=() choice
-    case ${1:-} in --help|-h) help_text; return 0;; --version) say "$VERSION"; return 0;; ''|--status|--show-socks) ;; *) help_text; return 1;; esac
+    if [[ ${1:-} == --worker && $# == 2 ]]; then [[ $EUID == 0 ]] || return 1; job_worker "$2"; return $?; fi
+    case ${1:-} in --help|-h) help_text; return 0;; --version) say "$VERSION"; return 0;; ''|--status|--show-socks|--last-job) ;; *) help_text; return 1;; esac
     [[ $EUID == 0 ]] || { fail '请使用 root 用户运行。'; return 1; }
     for item in systemctl ss flock sha256sum stat sync; do command -v "$item" >/dev/null 2>&1 || { fail "缺少系统工具：$item"; return 1; }; done
     for item in jq curl; do command -v "$item" >/dev/null 2>&1 || missing+=("$item"); done
@@ -696,6 +846,7 @@ main() {
         else fail '请先安装 jq 和 curl。'; return 1; fi
     fi
     discover || return 1
+    if [[ ${1:-} == --last-job ]]; then show_last_job; return $?; fi
     if [[ ${1:-} == --status ]]; then show_status; return $?; fi
     if [[ ${1:-} == --show-socks ]]; then show_socks_config; return $?; fi
     SELF_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
@@ -705,9 +856,12 @@ main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM HUP
     exec 9<>/dev/tty || { fail '请通过交互 SSH 终端运行。'; return 1; }
+    show_last_job
+    check_running_jobs || return 1
     [[ ! -L ${CONFIG_PATH%/*}/.v2bx-socks.lock ]] || return 1
     exec 8>"${CONFIG_PATH%/*}/.v2bx-socks.lock" || return 1
     flock -n 8 || { fail '另一个出口助手正在运行，请先关闭它。'; return 1; }
+    check_running_jobs || return 1
     while true; do
         say ''; say "V2bX SOCKS 出口助手 ${VERSION}（轻量版）"
         say '1. 配置 / 更换一个节点的 SOCKS 出口'
@@ -724,6 +878,7 @@ main() {
             6) if update_helper && [[ $RELOAD_HELPER == true ]]; then return 0; fi;;
             *) say '请输入菜单中的数字。';;
         esac
+        if [[ $BACKGROUND_SUBMITTED == true ]]; then wait_job; return 0; fi
     done
 }
 
