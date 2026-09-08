@@ -25,7 +25,7 @@ wget -O install-v2bx.sh https://raw.githubusercontent.com/joyefrck/v2bx_Outbound
 
 ## 统一管理菜单
 
-安装后输入 `v2bx` 或 `V2bX`。保留原菜单 0–17 的编号，新增 18：
+安装后输入 `v2bx` 或 `V2bX`。主菜单底部显示 V2bX 运行状态和是否开机自启，每次返回菜单时刷新；服务已运行仅表示进程状态，节点是否可用仍需实际连接验证。保留原菜单 0–17 的编号，新增 18：
 
 ```text
 0. 修改配置（节点管理）         1. 安装 V2bX

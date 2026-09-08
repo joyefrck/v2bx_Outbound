@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.2.0
+MANAGER_VERSION=3.2.1
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -905,6 +905,39 @@ m_open_ports() {
         iptables -P INPUT ACCEPT && iptables -P FORWARD ACCEPT && iptables -P OUTPUT ACCEPT && iptables -F || return 1
     fi
 }
+m_show_status() {
+    local state line active='' sub='' load='' enabled='' status='未知（无法读取服务状态）' autostart='未知'
+    if ! m_installed; then
+        printf '\nV2bX 状态：未安装\n'
+        return 0
+    fi
+    if state=$(systemctl show V2bX --property=LoadState,ActiveState,SubState 2>/dev/null); then
+        while IFS= read -r line; do
+            case $line in LoadState=*) load=${line#*=};; ActiveState=*) active=${line#*=};; SubState=*) sub=${line#*=};; esac
+        done <<< "$state"
+        if [[ $load == not-found ]]; then
+            status='服务未注册'
+        elif [[ $sub == auto-restart ]]; then
+            status='重启中'
+        else
+            case $active in
+                active) if [[ $sub == running ]]; then status='已运行'; else status='未运行'; fi;;
+                inactive) status='未运行';;
+                failed) status='启动失败';;
+                activating) status='启动中';;
+                deactivating) status='停止中';;
+                reloading) status='重新加载中';;
+            esac
+        fi
+    fi
+    enabled=$(systemctl is-enabled V2bX 2>/dev/null) || :
+    case $enabled in
+        enabled) autostart='是';;
+        enabled-runtime) autostart='否（仅本次运行期间启用）';;
+        disabled|static|indirect|masked|masked-runtime|not-found) autostart='否';;
+    esac
+    printf '\nV2bX 状态：%s\n是否开机自启：%s\n\n' "$status" "$autostart"
+}
 m_menu() {
     local choice version
     while true; do
@@ -914,6 +947,7 @@ m_menu() {
           '9. 设置开机自启' '10. 取消开机自启' '11. 安装 BBR' '12. 查看 V2bX 版本' \
           '13. 生成 X25519 密钥' '14. 更新管理工具（含 SOCKS 助手）' '15. 生成节点配置' \
           '16. 放行所有网络端口' '17. 退出' '18. SOCKS 出口管理'
+        m_show_status
         m_ask '请选择 [0-18]' || return 0; choice=$M_REPLY
         case $choice in
             0) m_edit;; 1) m_install_flow;;

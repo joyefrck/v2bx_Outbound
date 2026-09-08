@@ -34,6 +34,57 @@ m_secret() { IFS= read -r M_REPLY; }
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
 
+    def test_menu_service_status_and_autostart(self):
+        cases = [
+            ('loaded', 'active', 'running', 'enabled', '已运行', '是'),
+            ('loaded', 'inactive', 'dead', 'disabled', '未运行', '否'),
+            ('loaded', 'failed', 'failed', 'enabled', '启动失败', '是'),
+            ('loaded', 'activating', 'auto-restart', 'enabled', '重启中', '是'),
+            ('loaded', 'activating', 'start', 'enabled', '启动中', '是'),
+            ('loaded', 'deactivating', 'stop', 'disabled', '停止中', '否'),
+            ('loaded', 'active', 'exited', 'static', '未运行', '否'),
+            ('not-found', 'inactive', 'dead', 'not-found', '服务未注册', '否'),
+            ('loaded', 'active', 'running', 'enabled-runtime', '已运行', '否（仅本次运行期间启用）'),
+        ]
+        for load, active, sub, enabled, status, autostart in cases:
+            with self.subTest(active=active, sub=sub, enabled=enabled):
+                r = self.run_shell('''
+m_installed() { return 0; }
+systemctl() {
+    case $1 in
+        show) printf '%s\\n' 'LoadState=%s' 'ActiveState=%s' 'SubState=%s';;
+        is-enabled) echo '%s'; [[ '%s' == enabled ]];;
+        *) return 99;;
+    esac
+}
+m_menu
+''' % ('%s', load, active, sub, enabled, enabled), '17\n')
+                self.assertIn('V2bX 状态：' + status, r.stdout)
+                self.assertIn('是否开机自启：' + autostart, r.stdout)
+        r = self.run_shell('m_installed() { return 1; }; systemctl() { echo unexpected; }; m_menu', '17\n')
+        self.assertIn('V2bX 状态：未安装', r.stdout)
+        self.assertNotIn('unexpected', r.stdout)
+        r = self.run_shell('m_installed() { return 0; }; systemctl() { return 1; }; m_menu', '17\n')
+        self.assertIn('V2bX 状态：未知', r.stdout)
+        self.assertIn('是否开机自启：未知', r.stdout)
+
+    def test_menu_refreshes_status_after_service_action(self):
+        r = self.run_shell('''
+m_installed() { return 0; }
+fixture_active=active; fixture_sub=running
+systemctl() {
+    case $1 in
+        show) printf 'LoadState=loaded\\nActiveState=%s\\nSubState=%s\\n' "$fixture_active" "$fixture_sub";;
+        is-enabled) echo enabled;;
+        *) return 99;;
+    esac
+}
+m_service() { [[ $1 == stop ]] || return 1; fixture_active=inactive; fixture_sub=dead; }
+m_menu
+''', '5\n17\n')
+        self.assertEqual(r.stdout.count('V2bX 状态：'), 2)
+        self.assertLess(r.stdout.index('V2bX 状态：已运行'), r.stdout.index('V2bX 状态：未运行'))
+
     def test_existing_install_never_installs_or_generates(self):
         result = self.run_shell('''
 m_installed() { return 0; }
