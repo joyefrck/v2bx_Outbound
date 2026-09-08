@@ -1,0 +1,2 @@
+# Preserve upstream reference snapshots byte-for-byte.
+vendor/v2bx-script/** -whitespace

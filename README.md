@@ -1,34 +1,106 @@
-# V2bX 中文 SOCKS 出口助手
+# V2bX 安装与可选 SOCKS 出口管理
 
-给已经安装好的 V2bX 配置 SOCKS5 出口。继续用原安装脚本安装 V2bX、填写面板和节点信息；用这个脚本配置家宽 SOCKS 出口。
+一个中文入口完成 **安装 V2bX → 配置面板与节点 → 检查运行状态 → 可选配置 SOCKS5 出口**。
+已有 V2bX 时保留节点配置与服务状态，安装管理工具后直接打开菜单，不自动重装。
 
-## 一键安装并打开菜单
+## 一键安装
 
-在已安装并配置好 V2bX 的 Linux 服务器上，以 root 登录，复制执行：
-
-```bash
-curl -fL --retry 2 -o install-v2bx-socks.sh https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && bash install-v2bx-socks.sh && v2bx-socks
-```
-
-只有 wget 时也可以：
+在 Debian/Ubuntu、CentOS/Rocky/Alma 系列的 systemd Linux 服务器上，以 root 执行：
 
 ```bash
-wget -O install-v2bx-socks.sh https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && bash install-v2bx-socks.sh && v2bx-socks
+curl -fL --retry 2 -o install-v2bx.sh https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && bash install-v2bx.sh
 ```
 
-安装完成后，以后只需输入：
+只有 wget 时：
 
 ```bash
-v2bx-socks
+wget -O install-v2bx.sh https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && bash install-v2bx.sh
 ```
 
-每台服务器都可以使用同一条命令。助手读取当前服务器的配置，让你选择节点；没有固定服务器地址、节点 ID 或 SOCKS 账号。
+首次安装后按提示填写面板地址、API Key、内核、节点 ID 和协议。API Key 隐藏输入；支持多个节点共用面板。
+可以暂时跳过节点配置，之后运行 `v2bx generate`。服务启动并稳定监听后，询问是否配置 SOCKS：**默认回车跳过**。
+跳过 SOCKS 不影响普通 V2bX 使用；之后随时运行 `v2bx socks`。
 
-安装器把助手放到 `/usr/local/bin/v2bx-socks`，检查下载文件的 SHA256 和 Bash 语法后再替换。安装器不修改节点配置、不重启 V2bX；在菜单中确认保存出口时才会生效。
+面板节点信息错误、没有监听或服务启动失败时，不进入 SOCKS 应用流程。安装二进制成功不代表节点已可用。
 
-轻量版使用 **Bash + jq + curl**，不依赖 Python，也不新增后台服务。服务器已有 jq、curl 时直接使用；缺少时会提示安装对应工具，你无需手工编辑 JSON 配置。
+## 统一管理菜单
 
-如果服务器无法连接 GitHub，可从本仓库手动下载 `v2bx-socks.sh`，上传到服务器后执行 `bash /root/v2bx-socks.sh`。
+安装后输入 `v2bx` 或 `V2bX`。保留原菜单 0–17 的编号，新增 18：
+
+```text
+0. 修改配置（节点管理）         1. 安装 V2bX
+2. 更新 V2bX 内核               3. 卸载 V2bX
+4. 启动 V2bX                   5. 停止 V2bX
+6. 重启 V2bX                   7. 查看状态
+8. 查看日志                    9. 设置开机自启
+10. 取消开机自启                11. 安装 BBR
+12. 查看内核版本                13. 生成 X25519 密钥
+14. 更新管理工具（含 SOCKS）     15. 生成节点配置
+16. 放行所有网络端口            17. 退出
+18. SOCKS 出口管理
+```
+
+菜单 14 更新本仓库的管理工具和助手，菜单 2 只更新 V2bX 二进制。BBR 和防火墙功能只有手动选择并确认才会执行。
+
+```bash
+v2bx install           # 首次安装与配置向导
+v2bx generate          # 共用节点向导
+v2bx socks             # SOCKS 管理
+v2bx update v0.4.0     # 指定内核版本；省略版本则获取上游最新版
+v2bx update_shell      # 更新本仓库管理工具
+v2bx --help
+```
+
+## 引导式修改、新增和删除节点
+
+运行 `v2bx config` 或选择主菜单 **0. 修改配置（节点管理）**：
+
+```text
+1. 修改现有节点
+2. 新增节点
+3. 删除节点
+0. 返回
+```
+
+- **修改**：先列出现有节点的序号、名称、面板地址、ID、协议和内核，选择并确认目标；再选择要修改的面板地址、API Key、节点 ID、协议、TLS/证书、监听地址或出站源地址。显示当前值，回车保留；API Key 和 DNS 密钥隐藏输入。没有实际修改时不保存、不重启。
+- **新增**：选择已有内核（包括自定义名称的内核），或创建另一种内核，再按提示填写一个新节点。保留现有节点和路由；新内核需要的文件只有不存在时才创建。
+- **删除**：列出现有节点，选择并确认目标，再确认备份和应用。删除该节点以及对应的助手 SOCKS 出站、节点路由和 UDP 阻断规则，保留其他节点及自定义分流；删除最后一个节点后停止 V2bX。
+
+修改保留未编辑字段、内核参数和已有 SOCKS 出口。修改面板地址、ID 或协议时，程序保留该节点原有的路由标识，避免已有 SOCKS 或自定义节点规则失效。修改向导不切换现有节点的内核；需要另一内核时使用新增节点。
+
+每次应用前备份到 `manager-backups/nodes-*`，`paths.json` 记录文件路径，序号 `.before` 文件保留原始内容及权限，`.absent` 表示原本不存在的文件。保存前检查配置是否被其他操作改动，启动失败时恢复本次涉及的全部文件。重复节点或存在共享、异常 SOCKS 规则时拒绝保存，不自动覆盖。
+
+这与菜单 **15. 生成节点配置** 不同：菜单 0 只处理选定节点，菜单 15 会重新生成整套节点配置。
+
+## 旧用户升级与文件保护
+
+重新执行上面的一键命令即可纳入统一菜单。原 `v2bx-socks` 命令、只读参数、SOCKS 备份和后台任务保持兼容。
+如果只想更新旧助手，不安装统一管理工具：
+
+```bash
+bash install-v2bx.sh --helper-only
+```
+
+`--tools-only` 只安装或更新管理工具与助手，不更新内核、不修改节点、不重启服务。
+安装器从同一 GitHub 提交下载并校验发布文件，检查 Bash 语法后替换；失败恢复旧工具。
+工具安装到 `/usr/bin/V2bX`、`/usr/bin/v2bx` 和 `/usr/local/bin/v2bx-socks`。
+
+内核安装/更新先下载、解压并检查新文件，再替换。原二进制、Geo 数据和服务文件备份到
+`/etc/V2bX/manager-backups/`；失败尝试恢复，原服务停止时更新后也保持停止。
+
+重新生成节点配置会重建 `config.json`、`custom_outbound.json`、`route.json`、`sing_origin.json` 和 `hy2config.yaml`，
+**重置相关 SOCKS 规则**。向导两次确认后备份所有覆盖文件及权限，再保存和启动检查；失败恢复原文件。
+这类备份位于 `manager-backups/config-*`，与 SOCKS 助手菜单 3 使用的 `socks-helper-backups` 分开。
+配置生成与 SOCKS 后台任务共用配置锁，不允许同时修改。
+
+统一向导沿用上游默认拦截规则，支持 Xray、sing-box 和独立 Hysteria2；SOCKS 仍限 Xray / sing-box。
+TLS 可选择 HTTP/DNS 自动申请、已有证书或自签证书。DNS 参数和面板密钥不显示原文。
+暂不支持 Alpine/OpenRC、普通 Docker 安装、非标准服务布局。断电或强杀进程时应根据保留的备份检查恢复。
+
+## SOCKS 助手
+
+使用 `v2bx socks`、统一菜单 18 或旧命令 `v2bx-socks` 打开。
+助手是 **Bash + jq + curl**，服务器不需要 Python。运行依赖在统一管理工具首次运行时安装。
 
 ## 按提示配置
 
@@ -100,12 +172,12 @@ SOCKS 本身不加密。若 SOCKS 服务需要加密隧道，请先按服务商�
 - 保留已有拦截规则、面板信息、证书和其他节点默认出口。重启发生在整个 V2bX 服务，因此所有现有连接会短暂中断。
 - 标准“拦截规则 + 默认出口”配置。已有复杂分流、共享配置文件的多个内核、独立 Hysteria2 内核会明确提示，不自动覆盖。
 - 配置须为标准 JSON，相关出站和路由文件须已存在；带注释的 JSONC、符号链接或特殊配置路径会提示退出。
-- 不安装、不升级、不重装 V2bX，不改系统路由或 SSH 配置。
+- SOCKS 子菜单只负责出口配置；安装和升级由统一管理菜单单独执行。SOCKS 助手不改系统路由或 SSH 配置。
 - 默认不允许 SOCKS 失败后回退 VPS 直连；未知 UDP 支持时阻断 UDP。
 - SOCKS 出口测试通过，只能证明到 SOCKS 的 TCP / HTTPS 链路和当时的出口 IP，不能证明 IP 为家宽、固定出口、UDP 可用或客户端已正确接入。
 - 现有 V2bX 未运行、没有节点监听、面板返回 `Server does not exist` 时不应用配置；菜单 `2` 仍可单独测试 SOCKS。
 
-使用原 V2bX 向导重新生成节点配置，可能重建出站和路由文件；完成后重新运行本助手检查或再次配置出口。
+重新生成节点配置后，请从统一菜单 18 检查或再次配置 SOCKS 出口。
 
 ## 只读命令
 
@@ -126,7 +198,9 @@ bash build.sh
 python3 -m unittest discover -s tests -v
 bash -n install.sh
 bash -n v2bx-socks.sh
+bash -n v2bx-manager.sh
 bash v2bx-socks.sh --help
+bash v2bx-manager.sh --help
 ```
 
 额外的真实内核测试：
@@ -137,7 +211,23 @@ python3 tests/runtime_xray.py /path/to/V2bX
 
 该测试只监听本机回环地址，用临时配置和测试账号验证“所选节点经过 SOCKS、另一个节点保持直连”。不连接真实面板或家宽代理。
 
-`build.sh` 检查 `src/helper.sh` 的语法后，生成可独立运行的 `v2bx-socks.sh` 和 `SHA256SUMS`。修改助手源码后应重新构建并一起提交。`install.sh` 负责从此仓库下载、校验和安装命令。
+`build.sh` 从 `src/helper.sh` 和 `src/manager/` 生成两个独立脚本及 `SHA256SUMS`。
+修改源码或安装器后必须重新构建，一起提交产物、校验文件及许可证。CI 检查发布一致性、安装保护、节点向导、路由、回滚及终端交互。
+
+真实 systemd 验证只在一次性 Linux 环境执行：
+
+```bash
+V2BX_SYSTEMD_TEST=1 python3 -m unittest discover -s tests -v
+# 需要已安装 v0.4.0 内核与统一管理工具，且尚无 config.json：
+V2BX_MANAGER_RUNTIME_TEST=1 python3 tests/runtime_manager.py
+```
+
+后一个测试会使用本地面板测试接口创建两个真实 VLESS 节点，验证向导默认跳过 SOCKS，
+再通过后台任务配置 SOCKS，检查选中节点转发和另一个节点保持直连，并通过真实终端验证节点修改、新增、删除及最后一个节点停止服务；会修改该测试环境的服务与配置，不能在生产服务器运行。
+测试入口与临时数据均使用虚构账号；真实业务节点仍须用客户端验收实际出口 IP。
+
+上游脚本固定于 `c532ec57a67d7544c700f3f438c09dffcd0b1313`，原始参考代码、来源说明和 MPL-2.0 许可证保存在 `vendor/v2bx-script/`。
+整合后的运行代码由本仓库维护，不会在更新时下载原版管理菜单覆盖 SOCKS 入口。
 
 Python 仅用于开发者在本地和 GitHub Actions 运行测试，服务器运行助手不需要它。CI 检查生成文件一致性、路由、回滚、终端交互和安装失败保护。真实内核测试需另外提供 V2bX 二进制。
 

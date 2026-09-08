@@ -23,12 +23,15 @@ jobs:
           bash -n install.sh
           bash -n build.sh
           bash -n src/helper.sh
+          for file in src/manager/*.sh; do bash -n "$file"; done
+          bash -n v2bx-manager.sh
           bash -n v2bx-socks.sh
           bash build.sh
-          git diff --exit-code -- v2bx-socks.sh SHA256SUMS
+          git diff --exit-code -- v2bx-socks.sh v2bx-manager.sh SHA256SUMS LICENSE.MPL-2.0
           sha256sum --check SHA256SUMS
           bash install.sh --help
           bash v2bx-socks.sh --help
+          bash v2bx-manager.sh --help
       - name: Test routing, rollback, terminal and installer
         run: python3 -m unittest discover -s tests -v
       - name: Verify detached worker with real systemd and simulated SSH hangup
