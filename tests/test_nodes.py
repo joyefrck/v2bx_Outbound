@@ -130,7 +130,7 @@ m_health() { return 0; }
     def test_add_to_named_core_preserves_existing_config_and_rules(self):
         code = self.setup_nodes(named=True)
         before = json.loads(self.config.read_text()); routes = self.out.read_bytes(), self.route.read_bytes()
-        self.run_shell(code+'m_edit', '2\n1\nhttps://new.invalid\nfixture-new-key\n33\n2\ny\ny\n')
+        self.run_shell(code+'m_edit', '2\nhttps://new.invalid\nfixture-new-key\ny\n1\n33\n2\ny\nn\ny\n')
         after = json.loads(self.config.read_text())
         self.assertEqual(after['Nodes'][:2], before['Nodes'])
         self.assertEqual(after['Nodes'][2]['Core'], 'custom-core')
@@ -141,7 +141,7 @@ m_health() { return 0; }
     def test_add_new_core_creates_only_missing_files(self):
         code = self.setup_nodes()
         before = self.route.read_bytes(), self.out.read_bytes()
-        self.run_shell(code+'m_edit', '2\n0\nhttps://new.invalid\nfixture-new-key\n2\n33\n1\nn\ny\n')
+        self.run_shell(code+'m_edit', '2\nhttps://new.invalid\nfixture-new-key\ny\n2\n33\n1\nn\nn\ny\n')
         after = json.loads(self.config.read_text())
         self.assertEqual([c['Type'] for c in after['Cores']], ['xray', 'sing'])
         self.assertTrue(self.origin.exists())
@@ -150,7 +150,7 @@ m_health() { return 0; }
     def test_add_new_core_failure_removes_new_files(self):
         code = self.setup_nodes()
         original = self.config.read_bytes()
-        r = self.run_shell(code+'m_health() { return 1; }; m_edit', '2\n0\nhttps://new.invalid\nfixture-key\n2\n33\n1\nn\ny\n', check=False)
+        r = self.run_shell(code+'m_health() { return 1; }; m_edit', '2\nhttps://new.invalid\nfixture-key\ny\n2\n33\n1\nn\nn\ny\n', check=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(original, self.config.read_bytes())
         self.assertFalse(self.origin.exists())
@@ -192,3 +192,49 @@ m_edit
         self.run_shell(code+'m_edit', '3\n1\ny\ny\n')
         self.assertEqual(json.loads(self.route.read_text()), {})
         self.assertEqual(len(json.loads(self.config.read_text())['Nodes']), 1)
+
+    def test_batch_add_reuses_shared_panel_and_preserves_all_existing_nodes(self):
+        code = self.setup_nodes(named=True)
+        before = json.loads(self.config.read_text())
+        original_routes = self.out.read_bytes(), self.route.read_bytes()
+        self.run_shell(code+'m_edit', '2\nhttps://new.invalid\nfixture-batch-key\ny\n1\n33\n2\ny\ny\n1\n34\n1\nn\nn\ny\n')
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after['Nodes'][:2], before['Nodes'])
+        self.assertEqual([node['NodeID'] for node in after['Nodes'][2:]], [33, 34])
+        self.assertTrue(all(node['Core']=='custom-core' for node in after['Nodes']))
+        self.assertEqual([node['ApiKey'] for node in after['Nodes'][2:]], ['fixture-batch-key']*2)
+        self.assertEqual(after['Cores'], before['Cores'])
+        self.assertEqual(original_routes, (self.out.read_bytes(), self.route.read_bytes()))
+
+    def test_batch_add_can_use_different_panels(self):
+        code = self.setup_nodes()
+        self.run_shell(code+'m_edit', '2\nhttps://first.invalid\nfixture-first\nn\n1\n33\n1\nn\ny\nhttps://second.invalid\nfixture-second\n1\n34\n1\nn\nn\ny\n')
+        nodes = json.loads(self.config.read_text())['Nodes']
+        self.assertEqual([node['ApiHost'] for node in nodes[2:]], ['https://first.invalid','https://second.invalid'])
+        self.assertEqual([node['ApiKey'] for node in nodes[2:]], ['fixture-first','fixture-second'])
+
+    def test_duplicate_batch_is_rejected_as_a_whole(self):
+        code = self.setup_nodes()
+        original = self.config.read_bytes()
+        r = self.run_shell(code+'m_edit', '2\nhttps://new.invalid\nfixture-key\ny\n1\n33\n1\nn\ny\n1\n33\n1\nn\nn\ny\n', check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(original, self.config.read_bytes())
+        self.assertFalse((self.cfg/'calls').exists())
+
+    def test_interrupted_batch_does_not_save_first_node(self):
+        code = self.setup_nodes()
+        original = self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()
+        r = self.run_shell(code+'m_edit', '2\nhttps://new.invalid\nfixture-key\ny\n1\n33\n1\nn\ny\n', check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(original, (self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()))
+        self.assertFalse((self.cfg/'calls').exists())
+
+    def test_batch_selects_among_multiple_existing_named_cores(self):
+        code = self.setup_nodes(named=True)
+        config = json.loads(self.config.read_text())
+        config['Cores'].append({'Type':'xray','Name':'another-core','CustomOption':'also-keep'})
+        self.config.write_text(json.dumps(config))
+        self.run_shell(code+'m_edit', '2\nhttps://new.invalid\nfixture-key\ny\n1\n33\n1\nn\nn\n2\ny\n')
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after['Nodes'][-1]['Core'], 'another-core')
+        self.assertEqual(after['Cores'], config['Cores'])

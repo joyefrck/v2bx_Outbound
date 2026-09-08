@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.1.0
+MANAGER_VERSION=3.2.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -336,7 +336,7 @@ m_node() {
         elif .Core=="sing" then .+{TCPFastOpen:($v[8]=="true"),SniffEnabled:true}
         else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end' >> "$candidate/nodes.jsonl"
 }
-m_build_config() {
+m_collect_nodes() {
     local candidate=$1 api_host='' api_key='' fixed=n
     m_panel || return 1
     m_ask '后续节点是否共用面板地址与 API Key？[y/N]' || return 1; fixed=$M_REPLY
@@ -347,12 +347,23 @@ m_build_config() {
         [[ $fixed == [yY] ]] || m_panel || return 1
     done
     api_key=''; M_REPLY=''
-    jq -s --arg root "$M_CONFIG" '
-      {Log:{Level:"error",Output:""},Nodes:.,Cores:([.[].Core]|unique|map(
-        if .=="xray" then {Type:.,Log:{Level:"error",ErrorPath:($root+"/error.log")},
-          OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
-        elif .=="sing" then {Type:.,Log:{Level:"error",Timestamp:true},NTP:{Enable:false,Server:"time.apple.com",ServerPort:0},OriginalPath:($root+"/sing_origin.json")}
-        else {Type:.,Log:{Level:"error"}} end))}' "$candidate/nodes.jsonl" > "$candidate/config.json" || return 1
+}
+m_core_filter() {
+    cat <<'JQ'
+def core_config($root):
+    if .=="xray" then {Type:.,Log:{Level:"error",ErrorPath:($root+"/error.log")},
+      OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
+    elif .=="sing" then {Type:.,Log:{Level:"error",Timestamp:true},
+      NTP:{Enable:false,Server:"time.apple.com",ServerPort:0},OriginalPath:($root+"/sing_origin.json")}
+    else {Type:.,Log:{Level:"error"}} end;
+JQ
+}
+m_build_config() {
+    local candidate=$1
+    m_collect_nodes "$candidate" || return 1
+    { m_core_filter; printf '%s\n' '{Log:{Level:"error",Output:""},Nodes:.,Cores:([.[].Core]|unique|map(core_config($root)))}'; } > "$candidate/cores.jq" || return 1
+    jq -s --arg root "$M_CONFIG" -f "$candidate/cores.jq" "$candidate/nodes.jsonl" > "$candidate/config.json" || return 1
+    rm "$candidate/cores.jq"
     rm "$candidate/nodes.jsonl"
     write_route_templates "$candidate"
 }
@@ -660,51 +671,59 @@ m_node_track() {
     else touch "$N_STAGE/$N_FILE_INDEX.absent" || return 1; fi
 }
 m_add_existing_core() {
-    local count index core_ref M_NODE_CORE='' candidate="$N_STAGE/new-node" api_host='' api_key='' kind file
-    count=$(jq '.Cores|length' "$N_STAGE/config.json") || return 1
-    printf '选择新增节点使用的内核：\n'
-    jq -r '.Cores|to_entries[]|"\(.key+1). \(.value.Name // .value.Type|@json)（\(.value.Type)）"' "$N_STAGE/config.json"
-    printf '0. 创建另一种内核\n'
-    m_ask '请选择内核序号' || return 1
-    [[ $M_REPLY =~ ^[0-9]{1,6}$ ]] && ((10#$M_REPLY<=count)) || return 1
-    index=$((10#$M_REPLY-1))
-    if ((index>=0)); then
-        M_NODE_CORE=$(jq -r --argjson i "$index" '.Cores[$i].Type' "$N_STAGE/config.json")
-        core_ref=$(jq -r --argjson i "$index" '.Cores[$i]|if (.Name // "")=="" then .Type else .Name end' "$N_STAGE/config.json")
-        case $M_NODE_CORE in xray|sing|hysteria2) ;; *) m_error '该内核暂不支持新增向导。'; return 1;; esac
-    fi
+    local candidate="$N_STAGE/new-nodes" kind file count position ref choice total
+    local required=()
     mkdir "$candidate" || return 1
-    m_panel && m_node || return 1
-    api_key=''; M_REPLY=''
-    if ((index>=0)); then
-        jq --arg ref "$core_ref" '.Core=$ref' "$candidate/nodes.jsonl" > "$N_STAGE/node.after" || return 1
-    else
-        cp "$candidate/nodes.jsonl" "$N_STAGE/node.after" || return 1
-        kind=$(jq -r .Core "$N_STAGE/node.after")
-        # Existing named cores are explicitly selectable above; never duplicate refs.
-        jq -e --arg ref "$kind" 'all(.Cores[]; (if (.Name // "")=="" then .Type else .Name end)!=$ref)' "$N_STAGE/config.json" >/dev/null || {
-            m_error '此内核已存在，请返回并选择已有内核。'; return 1;
-        }
-        jq -n --arg kind "$kind" --arg root "$M_CONFIG" '
-          if $kind=="xray" then {Type:$kind,Log:{Level:"error",ErrorPath:($root+"/error.log")},OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
-          elif $kind=="sing" then {Type:$kind,Log:{Level:"error",Timestamp:true},NTP:{Enable:false,Server:"time.apple.com",ServerPort:0},OriginalPath:($root+"/sing_origin.json")}
-          else {Type:$kind,Log:{Level:"error"}} end' > "$N_STAGE/new-core.json" || return 1
-        write_route_templates "$candidate" || return 1
-        local required=()
-        case $kind in xray) required=(custom_outbound.json route.json);; sing) required=(sing_origin.json);; hysteria2) required=(hy2config.yaml);; esac
-        for file in "${required[@]}"; do
-            if [[ ! -e $M_CONFIG/$file ]]; then
-                m_node_track "$M_CONFIG/$file" || return 1
-                cp "$candidate/$file" "$N_STAGE/$N_FILE_INDEX.after" || return 1
-            else
-                [[ -f $M_CONFIG/$file && ! -L $M_CONFIG/$file ]] || return 1
+    printf '使用与菜单 15 相同的节点填写向导；完成后只追加新节点，保留原有节点和出口配置。\n'
+    m_collect_nodes "$candidate" || return 1
+    jq -s . "$candidate/nodes.jsonl" > "$candidate/batch.json" || return 1
+    total=$(jq length "$candidate/batch.json") || return 1
+    for ((position=0;position<total;position++)); do
+        jq --argjson i "$position" '.[$i]' "$candidate/batch.json" > "$N_STAGE/node.after" || return 1
+        kind=$(jq -r .Core "$N_STAGE/node.after") || return 1
+        jq --arg kind "$kind" '[.Cores[]|select(.Type==$kind)]' "$N_STAGE/config.json" > "$candidate/matches.json" || return 1
+        count=$(jq length "$candidate/matches.json") || return 1
+        if ((count>0)); then
+            choice=0
+            if ((count>1)); then
+                printf '第 %s 个新节点有多个 %s 内核可用，请选择要引用的已有内核：\n' "$((position+1))" "$kind"
+                jq -r 'to_entries[]|"\(.key+1). \(.value.Name // .value.Type|@json)"' "$candidate/matches.json"
+                m_ask '请选择内核序号' || return 1
+                [[ $M_REPLY =~ ^[1-9][0-9]{0,5}$ ]] && ((M_REPLY<=count)) || return 1
+                choice=$((M_REPLY-1))
             fi
-        done
-        jq --slurpfile core "$N_STAGE/new-core.json" '.Cores+=[$core[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
+            ref=$(jq -r --argjson i "$choice" '.[$i]|if (.Name // "")=="" then .Type else .Name end' "$candidate/matches.json") || return 1
+            m_node_set Core "$ref" || return 1
+        else
+            jq -e --arg ref "$kind" 'all(.Cores[]; (if (.Name // "")=="" then .Type else .Name end)!=$ref)' "$N_STAGE/config.json" >/dev/null || {
+                m_error '已有其他内核使用相同名称，未修改配置。'; return 1;
+            }
+            { m_core_filter; printf '%s\n' '$kind|core_config($root)'; } > "$candidate/core.jq" || return 1
+            jq -n --arg root "$M_CONFIG" --arg kind "$kind" -f "$candidate/core.jq" > "$N_STAGE/new-core.json" || return 1
+            write_route_templates "$candidate" || return 1
+            case $kind in xray) required=(custom_outbound.json route.json);; sing) required=(sing_origin.json);; hysteria2) required=(hy2config.yaml);; esac
+            for file in "${required[@]}"; do
+                if [[ ! -e $M_CONFIG/$file ]]; then
+                    m_node_track "$M_CONFIG/$file" || return 1
+                    cp "$candidate/$file" "$N_STAGE/$N_FILE_INDEX.after" || return 1
+                else
+                    [[ -f $M_CONFIG/$file && ! -L $M_CONFIG/$file ]] || return 1
+                fi
+            done
+            jq --slurpfile core "$N_STAGE/new-core.json" '.Cores+=[$core[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
+                mv "$N_STAGE/config.next" "$N_STAGE/config.json" || return 1
+        fi
+        jq --slurpfile node "$N_STAGE/node.after" '.Nodes+=[$node[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
             mv "$N_STAGE/config.next" "$N_STAGE/config.json" || return 1
-    fi
-    jq --slurpfile node "$N_STAGE/node.after" '.Nodes+=[$node[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
-        mv "$N_STAGE/config.next" "$N_STAGE/config.json"
+    done
+    # Enforce the append-only contract before the transaction can publish anything.
+    jq -e --slurpfile before "$N_STAGE/0.before" '
+      $before[0] as $old |
+      .Nodes[:($old.Nodes|length)]==$old.Nodes and
+      .Cores[:($old.Cores|length)]==$old.Cores and
+      del(.Nodes,.Cores)==($old|del(.Nodes,.Cores))
+    ' "$N_STAGE/config.json" >/dev/null || { m_error '原配置保留检查未通过，未保存。'; return 1; }
+    printf '本次新增 %s 个节点，原有节点全部保留。\n' "$total"
 }
 m_delete_node_rules() {
     local tag managed ref path role i

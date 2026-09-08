@@ -43,6 +43,7 @@ def main():
     assert os.environ.get('V2BX_MANAGER_RUNTIME_TEST') == '1', 'requires explicit disposable-environment opt-in'
     assert not Path('/etc/V2bX/config.json').exists(), 'requires a fresh installation with no node config'
     ports = [free_port(), free_port()]
+    extra_port = free_port()
     requests = []
 
     class Panel(BaseHTTPRequestHandler):
@@ -53,7 +54,7 @@ def main():
             nid = int(q['node_id'][0])
             requests.append((parsed.path, nid))
             if parsed.path.endswith('/config'):
-                body = {'server_port': ports[0 if nid in (1, 3) else 1], 'tls': 0, 'network': 'tcp', 'network_settings': {},
+                body = {'server_port': (extra_port if nid == 4 else ports[0 if nid in (1, 3) else 1]), 'tls': 0, 'network': 'tcp', 'network_settings': {},
                         'flow': '', 'base_config': {'push_interval': 60, 'pull_interval': 60}, 'routes': []}
             elif parsed.path.endswith('/user'):
                 body = {'users': [{'id': 1, 'uuid': USER, 'speed_limit': 0, 'device_limit': 0}]}
@@ -242,19 +243,29 @@ wait_job
                 ('确认备份并应用', 'y')])
         assert len(json.loads(Path('/etc/V2bX/config.json').read_text())['Nodes']) == 1
         assert b'SOCKS-EXIT' in vless(ports[0])
-        manage([('请选择操作', '2'), ('请选择内核序号', '1'),
+        preserved_node = json.loads(Path('/etc/V2bX/config.json').read_text())['Nodes'][0]
+        preserved_rules = Path('/etc/V2bX/route.json').read_bytes()
+        manage([('请选择操作', '2'),
                 ('请输入面板网址', f'http://127.0.0.1:{panel.server_port}'), ('请输入面板对接 API Key', KEY),
-                ('请输入节点 Node ID', '2'), ('协议：', '2'), ('是否为 Reality', 'n'), ('是否配置 TLS', 'n'),
+                ('后续节点是否共用', 'y'), ('节点核心：', '1'), ('请输入节点 Node ID', '2'), ('协议：', '2'), ('是否为 Reality', 'n'), ('是否配置 TLS', 'n'), ('是否继续添加节点', 'y'),
+                ('节点核心：', '1'), ('请输入节点 Node ID', '4'), ('协议：', '2'),
+                ('是否为 Reality', 'n'), ('是否配置 TLS', 'n'), ('是否继续添加节点', 'n'),
                 ('确认备份并应用', 'y')])
         assert b'SOCKS-EXIT' in vless(ports[0])
         assert b'DIRECT-EXIT' in vless(ports[1])
-        print('PASS: guided delete/add selected the correct nodes and preserved the remaining SOCKS exit.')
+        assert b'DIRECT-EXIT' in vless(extra_port)
+        assert json.loads(Path('/etc/V2bX/config.json').read_text())['Nodes'][0] == preserved_node
+        assert Path('/etc/V2bX/route.json').read_bytes() == preserved_rules
+        print('PASS: shared wizard appended two nodes; original node and SOCKS rules unchanged, all three client paths verified.')
 
         manage([('请选择操作', '3'), ('请选择要处理的节点序号', '1'), ('确认处理这个节点', 'y'),
                 ('确认备份并应用', 'y')])
         assert 'v2bx-socks-' not in Path('/etc/V2bX/custom_outbound.json').read_text()
         assert 'v2bx-socks-' not in Path('/etc/V2bX/route.json').read_text()
         assert b'DIRECT-EXIT' in vless(ports[1])
+        manage([('请选择操作', '3'), ('请选择要处理的节点序号', '1'), ('确认处理这个节点', 'y'),
+                ('确认备份并应用', 'y')])
+        assert b'DIRECT-EXIT' in vless(extra_port)
         manage([('请选择操作', '3'), ('请选择要处理的节点序号', '1'), ('确认处理这个节点', 'y'),
                 ('确认备份并应用', 'y')])
         assert json.loads(Path('/etc/V2bX/config.json').read_text())['Nodes'] == []

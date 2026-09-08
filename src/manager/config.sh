@@ -57,7 +57,7 @@ m_node() {
         elif .Core=="sing" then .+{TCPFastOpen:($v[8]=="true"),SniffEnabled:true}
         else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end' >> "$candidate/nodes.jsonl"
 }
-m_build_config() {
+m_collect_nodes() {
     local candidate=$1 api_host='' api_key='' fixed=n
     m_panel || return 1
     m_ask '后续节点是否共用面板地址与 API Key？[y/N]' || return 1; fixed=$M_REPLY
@@ -68,12 +68,23 @@ m_build_config() {
         [[ $fixed == [yY] ]] || m_panel || return 1
     done
     api_key=''; M_REPLY=''
-    jq -s --arg root "$M_CONFIG" '
-      {Log:{Level:"error",Output:""},Nodes:.,Cores:([.[].Core]|unique|map(
-        if .=="xray" then {Type:.,Log:{Level:"error",ErrorPath:($root+"/error.log")},
-          OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
-        elif .=="sing" then {Type:.,Log:{Level:"error",Timestamp:true},NTP:{Enable:false,Server:"time.apple.com",ServerPort:0},OriginalPath:($root+"/sing_origin.json")}
-        else {Type:.,Log:{Level:"error"}} end))}' "$candidate/nodes.jsonl" > "$candidate/config.json" || return 1
+}
+m_core_filter() {
+    cat <<'JQ'
+def core_config($root):
+    if .=="xray" then {Type:.,Log:{Level:"error",ErrorPath:($root+"/error.log")},
+      OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
+    elif .=="sing" then {Type:.,Log:{Level:"error",Timestamp:true},
+      NTP:{Enable:false,Server:"time.apple.com",ServerPort:0},OriginalPath:($root+"/sing_origin.json")}
+    else {Type:.,Log:{Level:"error"}} end;
+JQ
+}
+m_build_config() {
+    local candidate=$1
+    m_collect_nodes "$candidate" || return 1
+    { m_core_filter; printf '%s\n' '{Log:{Level:"error",Output:""},Nodes:.,Cores:([.[].Core]|unique|map(core_config($root)))}'; } > "$candidate/cores.jq" || return 1
+    jq -s --arg root "$M_CONFIG" -f "$candidate/cores.jq" "$candidate/nodes.jsonl" > "$candidate/config.json" || return 1
+    rm "$candidate/cores.jq"
     rm "$candidate/nodes.jsonl"
     write_route_templates "$candidate"
 }
