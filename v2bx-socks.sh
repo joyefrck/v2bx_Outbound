@@ -2,7 +2,8 @@
 # V2bX SOCKS Helper 2.3 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.3.0
+VERSION=2.3.1
+HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false TTY_MODE=''
 CONFIG_PATH='' WORK_DIR='' BACKUP_ROOT=''
@@ -99,23 +100,30 @@ discover() {
     BACKUP_ROOT=${CONFIG_PATH%/*}/socks-helper-backups
 }
 diagnosis() {
-    if journalctl -u V2bX.service -n 60 --no-pager -o cat 2>/dev/null | grep -Fq 'Server does not exist'; then
+    [[ -z $HEALTH_ERROR ]] || say "健康检查未通过：$HEALTH_ERROR"
+    if journalctl -u V2bX.service -n 60 --no-pager -o cat 2>/dev/null | grep -F 'Server does not exist' >/dev/null; then
         say '面板返回 Server does not exist：请检查节点 ID、协议和面板通信密钥。'
     else
-        say 'V2bX 尚未稳定运行或没有节点监听，请先通过原 V2bX 菜单检查。'
+        say '请运行 v2bx status / v2bx log 检查服务及面板节点信息。'
     fi
 }
 healthy() {
-    local seconds=${1:-5} state pid identity='' current i
+    local seconds=${1:-5} state pid identity='' current i listeners
+    HEALTH_ERROR=''
     for ((i=0; i<=seconds; i++)); do
-        state=$(service_state) || return 1
-        [[ $(printf '%s\n' "$state" | property ActiveState) == active && $(printf '%s\n' "$state" | property SubState) == running ]] || return 1
+        state=$(service_state) || { HEALTH_ERROR='无法读取 systemd 服务状态。'; return 1; }
+        [[ $(printf '%s\n' "$state" | property ActiveState) == active && $(printf '%s\n' "$state" | property SubState) == running ]] || {
+            HEALTH_ERROR='服务未处于 active/running 状态。'; return 1;
+        }
         pid=$(printf '%s\n' "$state" | property MainPID)
-        [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+        [[ $pid =~ ^[1-9][0-9]*$ ]] || { HEALTH_ERROR='服务没有有效的主进程 PID。'; return 1; }
         current="$pid:$(printf '%s\n' "$state" | property NRestarts)"
-        [[ -z $identity || $identity == "$current" ]] || return 1
+        [[ -z $identity || $identity == "$current" ]] || { HEALTH_ERROR='观察期间服务发生重启或主进程变化。'; return 1; }
         identity=$current
-        ss -H -lntup 2>/dev/null | grep -Eq "pid=$pid," || return 1
+        # Read ss completely before matching: grep -q in a pipe may close early,
+        # causing ss to fail with SIGPIPE under pipefail on busy/multi-node hosts.
+        listeners=$(ss -H -lntup 2>/dev/null) || { HEALTH_ERROR='无法读取监听端口（ss 执行失败）。'; return 1; }
+        grep -Eq "pid=$pid," <<< "$listeners" || { HEALTH_ERROR="没有找到 V2bX 主进程（PID ${pid}）的 TCP/UDP 监听端口。"; return 1; }
         (( i == seconds )) || sleep 1
     done
 }

@@ -95,6 +95,43 @@ class Fixture(unittest.TestCase):
             self.origin.write_bytes((self.task / "0.after").read_bytes())
 
 
+class HealthTests(Fixture):
+    state = '''
+service_state() { printf 'ActiveState=active\\nSubState=running\\nMainPID=1234\\nNRestarts=0\\n'; }
+'''
+
+    def test_large_listener_output_does_not_fail_after_matching_pid(self):
+        self.shell(self.state + '''
+ss() {
+    printf 'tcp LISTEN 0 4096 *:443 *:* users:(("V2bX",pid=1234,fd=9))\\n'
+    awk 'BEGIN {for(i=0;i<10000;i++) print "tcp LISTEN 0 4096 *:8000 *:* users:((other,pid=5678,fd=9))"}'
+}
+healthy 0
+''')
+
+    def test_health_rejects_missing_listener_and_failed_probe(self):
+        for output, code, reason in [
+            ('tcp LISTEN users:((other,pid=12345,fd=9))', 0, '没有找到'),
+            ('tcp LISTEN users:((V2bX,pid=1234,fd=9))', 1, '无法读取监听'),
+        ]:
+            with self.subTest(code=code):
+                r = self.shell(self.state + '''
+ss() { printf '%s\\n' %s; return %d; }
+healthy 0 && exit 99
+printf '%%s\\n' "$HEALTH_ERROR"
+''' % ('%s', shlex.quote(output), code))
+                self.assertIn(reason, r.stdout)
+
+    def test_health_rejects_restart_during_observation(self):
+        r = self.shell(self.state + '''
+ss() { printf 'tcp LISTEN users:((V2bX,pid=1234,fd=9))\\n'; }
+sleep() { service_state() { printf 'ActiveState=active\\nSubState=running\\nMainPID=1234\\nNRestarts=1\\n'; }; }
+healthy 1 && exit 99
+printf '%s\\n' "$HEALTH_ERROR"
+''')
+        self.assertIn('发生重启', r.stdout)
+
+
 class RoutingTests(Fixture):
     def test_xray_node_scope_keeps_other_node_and_blocks(self):
         self.setup_config(two_nodes=True)
