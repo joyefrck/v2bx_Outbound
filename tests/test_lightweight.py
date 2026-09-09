@@ -398,7 +398,7 @@ class CurlTests(Fixture):
 
 
 class TerminalTests(unittest.TestCase):
-    def test_terminal_prompt_and_hidden_input(self):
+    def test_terminal_prompt_and_visible_password_input(self):
         code = 'source "$1"; exec 9<>/dev/tty; ask NODE 11; n=$REPLY; secret_read PASSWORD; [[ $REPLY == fixture-password ]] && printf "\\nRESULT:%s\\n" "$n"'
         pid, fd = pty.fork()
         if pid == 0:
@@ -416,7 +416,7 @@ class TerminalTests(unittest.TestCase):
                 if stage == 0 and b'NODE' in out: os.write(fd, b'\n'); stage=1
                 if stage == 1 and b'PASSWORD' in out: os.write(fd, b'fixture-password\n'); stage=2
             self.assertIn(b'RESULT:11', out)
-            self.assertNotIn(b'fixture-password', out)
+            self.assertIn(b'fixture-password', out)
         finally:
             os.close(fd)
             waited, _ = os.waitpid(pid, os.WNOHANG)

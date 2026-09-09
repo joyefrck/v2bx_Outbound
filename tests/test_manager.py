@@ -298,7 +298,14 @@ install_tools "$2/V2bX" "$2/helper" "$2/aliases/v2bx" "$2/LICENSE" https://fixtu
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.manager.read_bytes(), (ROOT / 'v2bx-manager.sh').read_bytes())
         self.assertEqual(self.alias.resolve(), self.manager.resolve())
-        self.assertIn('18. SOCKS', self.manager.read_text())
+        menu = subprocess.run(['bash', '-c', '''
+source "$1"
+m_ask() { M_REPLY=17; }
+m_installed() { return 1; }
+m_menu
+''', 'installed-menu-test', str(self.manager)], capture_output=True, text=True, timeout=5)
+        self.assertEqual(menu.returncode, 0, menu.stderr)
+        self.assertIn('18. SOCKS', menu.stdout)
 
     def test_bad_second_payload_preserves_both_old_commands(self):
         before = self.manager.read_bytes(), self.helper.read_bytes()

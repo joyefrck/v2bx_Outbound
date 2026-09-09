@@ -42,9 +42,9 @@ m_open_ports() {
     fi
 }
 m_show_status() {
-    local state line active='' sub='' load='' enabled='' status='未知（无法读取服务状态）' autostart='未知'
+    local state line active='' sub='' load='' enabled='' status='未知（无法读取服务状态）' autostart='未知' tone=33
     if ! m_installed; then
-        printf '\nV2bX 状态：未安装\n'
+        m_line 33 '  V2bX 状态：未安装'
         return 0
     fi
     if state=$(systemctl show V2bX --property=LoadState,ActiveState,SubState 2>/dev/null); then
@@ -72,18 +72,38 @@ m_show_status() {
         enabled-runtime) autostart='否（仅本次运行期间启用）';;
         disabled|static|indirect|masked|masked-runtime|not-found) autostart='否';;
     esac
-    printf '\nV2bX 状态：%s\n是否开机自启：%s\n\n' "$status" "$autostart"
+    case $status in 已运行) tone=32;; 启动失败|服务未注册) tone=31;; esac
+    m_line "$tone" "  V2bX 状态：${status}"
+    if [[ $autostart == 是 ]]; then tone=32; else tone=33; fi
+    m_line "$tone" "  是否开机自启：${autostart}"
 }
 m_menu() {
-    local choice version
+    local choice
     while true; do
-        printf '\nV2bX 安装与 SOCKS 出口管理 %s\n' "$MANAGER_VERSION"
-        printf '%s\n' '0. 修改配置（节点管理）' '1. 安装 V2bX' '2. 更新 V2bX 内核' '3. 卸载 V2bX' \
-          '4. 启动 V2bX' '5. 停止 V2bX' '6. 重启 V2bX' '7. 查看 V2bX 状态' '8. 查看日志' \
-          '9. 设置开机自启' '10. 取消开机自启' '11. 安装 BBR' '12. 查看 V2bX 版本' \
-          '13. 生成 X25519 密钥' '14. 更新管理工具（含 SOCKS 助手）' '15. 生成节点配置' \
-          '16. 放行所有网络端口' '17. 退出' '18. SOCKS 出口管理'
+        m_banner
         m_show_status
+        m_section '◇ 节点与出口'
+        m_option 0 '修改配置（节点管理）'
+        m_option 15 '生成节点配置'
+        m_option 18 'SOCKS 出口管理'
+        m_option 7 '查看 V2bX 状态'
+        m_option 8 '查看日志'
+        m_section '↻ 服务控制'
+        m_option 4 '启动 V2bX'
+        m_option 5 '停止 V2bX'
+        m_option 6 '重启 V2bX'
+        m_option 9 '设置开机自启'
+        m_option 10 '取消开机自启'
+        m_section '⚙ 安装与维护'
+        m_option 1 '安装 V2bX'
+        m_option 2 '更新 V2bX 内核'
+        m_option 14 '更新管理工具（含 SOCKS 助手）'
+        m_option 12 '查看 V2bX 版本'
+        m_option 13 '生成 X25519 密钥'
+        m_option 11 '安装 BBR'
+        m_option 16 '放行所有网络端口'
+        m_option 3 '卸载 V2bX'
+        printf '\n'; m_option 17 '退出 · 下次见'
         m_ask '请选择 [0-18]' || return 0; choice=$M_REPLY
         case $choice in
             0) m_edit;; 1) m_install_flow;;
@@ -94,7 +114,7 @@ m_menu() {
             12) m_need_install && "$M_BINARY/V2bX" version;; 13) m_need_install && "$M_BINARY/V2bX" x25519;;
             14) m_update_tools && exec bash "$M_SELF";;
             15) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
-            16) m_open_ports;; 17) return 0;; 18) m_socks;; *) printf '请输入 0-18。\n';;
+            16) m_open_ports;; 17) return 0;; 18) m_socks;; *) m_line 33 '请输入 0-18。';;
         esac
     done
 }

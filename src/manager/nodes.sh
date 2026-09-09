@@ -40,7 +40,7 @@ m_node_field() {
     local key=$1 prompt=$2 secret=${3:-false} current
     current=$(jq -r --arg key "$key" 'getpath($key|split(".")) // ""' "$N_STAGE/node.after") || return 1
     if [[ $secret == true ]]; then
-        m_secret "${prompt}（回车保留，当前值隐藏）" || return 1
+        m_secret "${prompt}（直接显示，回车保留）" || return 1
     else
         printf '当前值：%s\n' "$(printf '%s' "$current" | jq -Rs .)"
         m_ask "${prompt}（回车保留）" || return 1
@@ -56,7 +56,7 @@ m_node_field() {
 m_edit_protocol() {
     local proto
     printf '当前协议：%s\n' "$(jq -r '.NodeType|@json' "$N_STAGE/node.after")"
-    m_ask '协议：1. Shadowsocks  2. VLESS  3. VMess  4. Hysteria  5. Hysteria2  6. Trojan  7. TUIC  8. AnyTLS（回车保留）' || return 1
+    m_protocol_options '请选择协议 [1-8]（回车保留）' || return 1
     [[ -n $M_REPLY ]] || return 0
     case $M_REPLY in 1) proto=shadowsocks;; 2) proto=vless;; 3) proto=vmess;; 4) proto=hysteria;; 5) proto=hysteria2;; 6) proto=trojan;; 7) proto=tuic;; 8) proto=anytls;; *) return 1;; esac
     case "$N_KIND:$proto" in
@@ -68,7 +68,7 @@ m_edit_protocol() {
 m_edit_tls() {
     local mode
     printf '当前证书模式：%s\n' "$(jq -r '.CertConfig.CertMode // "none"|@json' "$N_STAGE/node.after")"
-    m_ask '证书模式：1. none（含 Reality）  2. HTTP  3. DNS  4. 已有证书 file  5. 自签 self（回车保留）' || return 1
+    m_choose 'TLS 证书' '请选择证书模式 [1-5]（回车保留）' 'none（含 Reality）' HTTP DNS '已有证书 file' '自签 self' || return 1
     case $M_REPLY in '') return 0;; 1) mode=none;; 2) mode=http;; 3) mode=dns;; 4) mode=file;; 5) mode=self;; *) return 1;; esac
     m_node_set CertConfig.CertMode "$mode" || return 1
     [[ $mode != none ]] || return 0
@@ -82,7 +82,7 @@ m_edit_tls() {
         done
     elif [[ $mode == dns ]]; then
         m_node_field CertConfig.Provider 'DNS Provider' || return 1
-        m_secret 'DNS 环境参数 JSON（隐藏输入，回车保留）' || return 1
+        m_secret 'DNS 环境参数 JSON（直接显示，回车保留）' || return 1
         if [[ -n $M_REPLY ]]; then
             printf '%s' "$M_REPLY" | jq -e 'type=="object" and all(.[]; type=="string")' >/dev/null 2>&1 || return 1
             printf '%s' "$M_REPLY" | jq --slurpfile node "$N_STAGE/node.after" '. as $env | $node[0] | .CertConfig.DNSEnv=$env' > "$N_STAGE/node.next" &&
@@ -96,8 +96,10 @@ m_edit_existing() {
     m_node_core || return 1
     cp "$N_STAGE/node.before" "$N_STAGE/node.after" || return 1
     while true; do
-        printf '%s\n' '修改所选节点（其他配置保留）：' '1. 面板地址' '2. 面板 API Key' '3. 节点 ID' \
-            '4. 节点协议' '5. TLS / 证书' '6. 监听地址' '7. 出站源地址' '0. 完成修改' '9. 取消全部修改'
+        m_section '修改所选节点'
+        m_option 1 '面板地址'; m_option 2 '面板 API Key'; m_option 3 '节点 ID'
+        m_option 4 '节点协议'; m_option 5 'TLS / 证书'; m_option 6 '监听地址'; m_option 7 '出站源地址'
+        m_option 0 '完成修改'; m_option 9 '取消全部修改'
         m_ask '请选择修改项' || return 1; choice=$M_REPLY
         case $choice in
             1) m_node_field ApiHost '面板地址';; 2) m_node_field ApiKey '面板 API Key' true;;
@@ -298,7 +300,8 @@ m_edit() (
     trap 'exit 143' HUP TERM
     m_node_track "$M_CONFIG/config.json" || exit 1
     cp "$N_STAGE/0.before" "$N_STAGE/config.json" || exit 1
-    printf '%s\n' '节点配置管理' '1. 修改现有节点' '2. 新增节点' '3. 删除节点' '0. 返回'
+    m_section '节点配置管理'
+    m_option 1 '修改现有节点'; m_option 2 '新增节点'; m_option 3 '删除节点'; m_option 0 '返回'
     m_ask '请选择操作' || exit 1
     case $M_REPLY in
         0) exit 0;;

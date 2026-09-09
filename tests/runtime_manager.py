@@ -99,9 +99,9 @@ def main():
         answer('请输入面板对接 API Key', KEY)
         answer('后续节点是否共用', 'y')
         for nid in (1, 2):
-            answer('节点核心：', '1')
+            answer('请选择节点核心', '1')
             answer('请输入节点 Node ID', str(nid))
-            answer('协议：', '2')
+            answer('请选择协议', '2')
             answer('是否为 Reality', 'n')
             answer('是否配置 TLS', 'n')
             answer('是否继续添加节点', 'y' if nid == 1 else 'n')
@@ -120,10 +120,10 @@ def main():
                     pass
         else:
             raise AssertionError('wizard did not exit')
-        assert KEY.encode() not in output, 'API key echoed in terminal'
+        assert KEY.encode() in output, 'API key was not visible while typing'
         assert json.loads(Path('/etc/V2bX/config.json').read_text())['Nodes'][0]['ApiKey'] == KEY
         assert all(('/api/v1/server/UniProxy/user', i) in requests for i in (1, 2))
-        print('PASS: actual TTY wizard generated two nodes; hidden API key round-tripped; real systemd service stable; SOCKS skipped.')
+        print('PASS: actual TTY wizard generated two nodes; visible API key round-tripped; real systemd service stable; SOCKS skipped.')
 
         subprocess.run(['ip', 'addr', 'replace', DEST+'/32', 'dev', 'lo'], check=True)
 

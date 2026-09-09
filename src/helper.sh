@@ -1,37 +1,52 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.3 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.4 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.3.1
+VERSION=2.4.0
 HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
-TX_ARMED=false TTY_MODE=''
+TX_ARMED=false
 CONFIG_PATH='' WORK_DIR='' BACKUP_ROOT=''
 FILES=()
 SELF_PATH='' RELOAD_HELPER=false
 JOB_DIR='' BACKGROUND_SUBMITTED=false
 
-say() { printf '%s\n' "$*"; }
-fail() { printf '未完成：%s\n' "$*" >&2; return 1; }
+ui_paint() {
+    if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR+x} ]]; then
+        printf '\033[%sm%s\033[0m' "$1" "$2"
+    else printf '%s' "$2"; fi
+}
+ui_line() { ui_paint "$1" "$2"; printf '\n'; }
+ui_section() { printf '\n'; ui_line '1;36' "  ── $1 ──"; }
+ui_option() { ui_paint '1;36' "  $1. "; ui_line 37 "$2"; }
+say() { ui_line 37 "$*"; }
+fail() { ui_line '1;31' "未完成：$*" >&2; return 1; }
 ask() {
     local prompt=$1 default=${2:-}
-    printf '%s' "$prompt" >&9
-    [[ -z $default ]] || printf ' [%s]' "$default" >&9
-    printf '：' >&9
+    ui_paint '1;36' '  › ' >&9
+    ui_paint '1;37' "$prompt" >&9
+    [[ -z $default ]] || ui_paint 36 " [$default]" >&9
+    ui_paint '1;37' '：' >&9
     IFS= read -r REPLY <&9 || return 1
     [[ -n $REPLY ]] || REPLY=$default
 }
 confirm() { ask "$1（输入 y 确认，回车取消）" && [[ $REPLY == y || $REPLY == Y ]]; }
-secret_read() {
-    local result=0
-    TTY_MODE=$(stty -g <&9) || return 1
-    stty -echo <&9 || return 1
-    printf '%s：' "$1" >&9
-    IFS= read -r REPLY <&9 || result=$?
-    stty "$TTY_MODE" <&9
-    TTY_MODE=''
-    printf '\n' >&9
-    return "$result"
+secret_read() { ask "$1"; }
+show_menu() {
+    printf '\n'
+    ui_line '1;36' '  +--------------------------------------+'
+    ui_line '1;36' '  |   >_  V2bX  /  SOCKS STATION         |'
+    ui_line '1;36' '  +--------------------------------------+'
+    say "  为节点挑一个出口    v${VERSION}"
+    ui_section '◇ 出口与连接'
+    ui_option 1 '配置 / 更换一个节点的 SOCKS 出口'
+    ui_option 2 '只测试 SOCKS（不改配置）'
+    ui_option 5 '查看 SOCKS 出口配置'
+    ui_section '↻ 状态与维护'
+    ui_option 4 '查看节点与服务状态'
+    ui_option 3 '恢复修改前的配置'
+    ui_option 6 '检查 / 更新助手'
+    printf '\n'; ui_option 0 '退出 · 下次见'
 }
 
 hash_file() {
@@ -173,19 +188,20 @@ probe_socks() {
       (test("^[0-9a-fA-F:]+$") and contains(":"))' >/dev/null 2>&1; then
         fail '出口查询未返回有效 IP 地址，未保存配置。'; return 1
     fi
-    say "SOCKS TCP / HTTPS 测试通过，当前出口 IP：$result"
+    ui_line '1;32' "SOCKS TCP / HTTPS 测试通过，当前出口 IP：${result}"
     say '请与你购买的出口信息核对；这不代表 UDP 或客户端完整链路已验证。'
 }
 ask_endpoint() {
     local host port user password=''
-    say '请分别填写 SOCKS5 地址、端口和认证信息。'
+    ui_section 'SOCKS5 连接信息'
+    say '  请分别填写地址、端口和认证信息。'
     ask 'SOCKS 地址（只填 IP 或域名）' || return 1; host=$REPLY
     host=${host#[}; host=${host%]}
     ask 'SOCKS 端口' 1080 || return 1; port=$REPLY
     [[ $port =~ ^[0-9]{1,5}$ ]] || { fail '端口应为 1—65535 的整数。'; return 1; }
     ask '用户名（无认证 / IP 白名单直接回车）' || return 1; user=$REPLY
     if [[ -n $user ]]; then
-        secret_read '密码（输入时不显示）' || return 1
+        secret_read '密码（直接显示）' || return 1
         password=$REPLY; REPLY=''
     fi
     # jq consumes fields over stdin; do not pass credentials using --arg.
@@ -808,7 +824,6 @@ cleanup() {
     local code=$?
     trap - EXIT
     trap '' INT TERM HUP
-    [[ -z $TTY_MODE ]] || stty "$TTY_MODE" <&9
     if [[ $TX_ARMED == true && -n $TX_DIR ]]; then rollback || true; fi
     [[ -z $ATOMIC_TMP ]] || rm -f "$ATOMIC_TMP"
     if [[ -n $TASK_DIR && $TASK_DIR == */v2bx-socks.* && -d $TASK_DIR ]]; then rm -rf "$TASK_DIR"; fi
@@ -871,14 +886,7 @@ main() {
     flock -n 8 || { fail '另一个出口助手正在运行，请先关闭它。'; return 1; }
     check_running_jobs || return 1
     while true; do
-        say ''; say "V2bX SOCKS 出口助手 ${VERSION}（轻量版）"
-        say '1. 配置 / 更换一个节点的 SOCKS 出口'
-        say '2. 只测试 SOCKS（不改配置）'
-        say '3. 恢复修改前的配置'
-        say '4. 查看节点与服务状态'
-        say '5. 查看 SOCKS 出口配置'
-        say '6. 检查 / 更新助手'
-        say '0. 退出'
+        show_menu
         ask '请选择' 0 || return 1; choice=$REPLY
         case $choice in
             0) return 0;; 1) configure_menu || true;; 2) ask_endpoint || true;;

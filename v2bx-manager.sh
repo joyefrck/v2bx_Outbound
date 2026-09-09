@@ -1,17 +1,42 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.2.2
+MANAGER_VERSION=3.3.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
 M_HELPER=/usr/local/bin/v2bx-socks
 M_SELF=/usr/bin/V2bX
 
-m_error() { printf '未完成：%s\n' "$*" >&2; return 1; }
-m_ask() { printf '%s：' "$1" >&9; IFS= read -r M_REPLY <&9; }
+m_paint() {
+    if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR+x} ]]; then
+        printf '\033[%sm%s\033[0m' "$1" "$2"
+    else printf '%s' "$2"; fi
+}
+m_line() { m_paint "$1" "$2"; printf '\n'; }
+m_section() { printf '\n'; m_line '1;36' "  ── $1 ──"; }
+m_option() { m_paint '1;36' "  $1. "; m_line 37 "$2"; }
+m_choose() {
+    local title=$1 prompt=$2 option index=1
+    shift 2
+    m_section "$title"
+    for option in "$@"; do m_option "$index" "$option"; index=$((index+1)); done
+    m_ask "$prompt"
+}
+m_protocol_options() {
+    m_choose '节点协议' "$1" Shadowsocks VLESS VMess Hysteria Hysteria2 Trojan TUIC AnyTLS
+}
+m_banner() {
+    printf '\n'
+    m_line '1;36' '  +--------------------------------------+'
+    m_line '1;36' '  |   >_  V2bX  /  NETWORK CONTROL       |'
+    m_line '1;36' '  +--------------------------------------+'
+    m_line 37 "  节点连接世界 · 出口由你掌控    v${MANAGER_VERSION}"
+}
+m_error() { m_line '1;31' "未完成：$*" >&2; return 1; }
+m_ask() { m_paint '1;36' '  › ' >&9; m_paint '1;37' "$1：" >&9; IFS= read -r M_REPLY <&9; }
 m_confirm() { m_ask "$1 [y/N]" && [[ $M_REPLY == [yY] ]]; }
-m_secret() { printf '%s：' "$1" >&9; IFS= read -rs M_REPLY <&9; local rc=$?; printf '\n' >&9; return "$rc"; }
+m_secret() { m_ask "$1"; }
 m_fetch() {
     curl -q --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
         --connect-timeout 15 --max-time 300 --retry 2 --output "$2" "$1"
@@ -279,10 +304,11 @@ EOF
 }
 # Shared node wizard, adapted from upstream initconfig.sh (MPL-2.0).
 m_panel() {
+    m_section '面板连接'
     m_ask '请输入面板网址（https://example.com）' || return 1
     [[ $M_REPLY =~ ^https?://[^[:space:]]+$ ]] || { m_error '面板地址须以 http:// 或 https:// 开头。'; return 1; }
     api_host=$M_REPLY
-    m_secret '请输入面板对接 API Key（隐藏输入）' || return 1
+    m_secret '请输入面板对接 API Key（直接显示）' || return 1
     [[ -n $M_REPLY ]] || return 1
     api_key=$M_REPLY; M_REPLY=''
 }
@@ -290,7 +316,7 @@ m_node() {
     local core node_id protocol reality=n tls=n certmode=none domain=example.com fast=true listen=0.0.0.0 certfile keyfile provider='' dnsenv='{}'
     if [[ -n ${M_NODE_CORE:-} ]]; then core=$M_NODE_CORE
     else
-        m_ask '节点核心：1. Xray  2. sing-box  3. 独立 Hysteria2' || return 1
+        m_choose '节点核心' '请选择节点核心 [1-3]' 'Xray' 'sing-box' '独立 Hysteria2' || return 1
         case $M_REPLY in 1) core=xray;; 2) core=sing;; 3) core=hysteria2;; *) m_error '请选择 1、2 或 3。'; return 1;; esac
     fi
     m_ask '请输入节点 Node ID（正整数）' || return 1
@@ -298,7 +324,7 @@ m_node() {
     node_id=$M_REPLY
     if [[ $core == hysteria2 ]]; then protocol=hysteria2
     else
-        m_ask '协议：1. Shadowsocks  2. VLESS  3. VMess  4. Hysteria  5. Hysteria2  6. Trojan  7. TUIC  8. AnyTLS' || return 1
+        m_protocol_options '请选择协议 [1-8]' || return 1
         case $M_REPLY in 1) protocol=shadowsocks;; 2) protocol=vless;; 3) protocol=vmess;; 4) protocol=hysteria;; 5) protocol=hysteria2;; 6) protocol=trojan;; 7) protocol=tuic;; 8) protocol=anytls;; *) return 1;; esac
         if [[ $core == xray && $protocol != shadowsocks && $protocol != vless && $protocol != vmess && $protocol != trojan ]]; then
             m_error '此协议请使用 sing-box 或独立 Hysteria2 内核。'; return 1
@@ -309,7 +335,7 @@ m_node() {
     if [[ $reality != [yY] && $tls != y ]]; then m_ask '是否配置 TLS？[y/N]' || return 1; tls=$M_REPLY; fi
     certfile="$M_CONFIG/fullchain.cer"; keyfile="$M_CONFIG/cert.key"
     if [[ $reality != [yY] && $tls == [yY] ]]; then
-        m_ask '证书模式：1. HTTP 自动申请  2. DNS 自动申请  3. 已有证书（file）  4. 自签证书（self）' || return 1
+        m_choose 'TLS 证书' '请选择证书模式 [1-4]' 'HTTP 自动申请' 'DNS 自动申请' '已有证书（file）' '自签证书（self）' || return 1
         case $M_REPLY in 1) certmode=http;; 2) certmode=dns;; 3) certmode=file;; 4) certmode=self;; *) return 1;; esac
         m_ask '请输入证书域名' || return 1; domain=$M_REPLY
         [[ -n $domain ]] || return 1
@@ -319,7 +345,7 @@ m_node() {
             [[ $certfile == /* && $keyfile == /* && -f $certfile && -f $keyfile ]] || { m_error '证书和私钥文件必须存在。'; return 1; }
         elif [[ $certmode == dns ]]; then
             m_ask 'DNS Provider（例如 cloudflare）' || return 1; provider=$M_REPLY
-            m_secret 'DNS 环境参数 JSON（例如 {"CF_DNS_API_TOKEN":"…"}，隐藏输入）' || return 1
+            m_secret 'DNS 环境参数 JSON（例如 {"CF_DNS_API_TOKEN":"…"}，直接显示）' || return 1
             dnsenv=$M_REPLY; M_REPLY=''
             printf '%s' "$dnsenv" | jq -e 'type=="object" and all(.[]; type=="string")' >/dev/null 2>&1 || return 1
         fi
@@ -334,16 +360,19 @@ m_node() {
             Email:"v2bx@github.com",Provider:$v[11],DNSEnv:($v[12]|fromjson)}} |
         if .Core=="xray" then .+{EnableProxyProtocol:false,EnableUot:true,EnableTFO:true,DNSType:"UseIPv4"}
         elif .Core=="sing" then .+{TCPFastOpen:($v[8]=="true"),SniffEnabled:true}
-        else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end' >> "$candidate/nodes.jsonl"
+        else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end' >> "$candidate/nodes.jsonl" || return 1
+    m_line 32 "  ✓ 节点已填写 · ID ${node_id} · ${core} / ${protocol}"
 }
 m_collect_nodes() {
-    local candidate=$1 api_host='' api_key='' fixed=n
+    local candidate=$1 api_host='' api_key='' fixed=n node_number=1
     m_panel || return 1
     m_ask '后续节点是否共用面板地址与 API Key？[y/N]' || return 1; fixed=$M_REPLY
     while true; do
+        m_section "第 ${node_number} 个节点"
         m_node || return 1
         m_ask '是否继续添加节点？[y/N]' || return 1
         [[ $M_REPLY == [yY] ]] || break
+        node_number=$((node_number+1))
         [[ $fixed == [yY] ]] || m_panel || return 1
     done
     api_key=''; M_REPLY=''
@@ -407,10 +436,13 @@ m_generate() (
     trap m_config_cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM HUP
-    printf '向导会重新生成节点、出站和路由文件，重置相关 SOCKS 规则；沿用上游默认拦截规则。原文件及权限会完整备份。\n'
+    m_section '◇ 节点配置向导'
+    m_line 33 '  ! 将重新生成节点、出站和路由文件，重置相关 SOCKS 规则。'
+    m_line 37 '  沿用上游默认拦截规则；原文件及权限会完整备份。'
     m_confirm '继续生成配置？' || exit 2
     m_build_config "$stage" || exit 1
     for file in config.json custom_outbound.json route.json sing_origin.json; do jq -e . "$stage/$file" >/dev/null || exit 1; done
+    m_section '保存与应用'
     m_confirm '确认保存配置并重启整个 V2bX 服务？' || exit 2
     [[ ! -L $M_CONFIG/manager-backups ]] || exit 1
     mkdir -p "$M_CONFIG/manager-backups" && chmod 700 "$M_CONFIG/manager-backups" || exit 1
@@ -422,7 +454,8 @@ m_generate() (
     for file in "${M_FILES[@]}"; do install -m 600 "$stage/$file" "$M_CONFIG/$file" || exit 1; done
     systemctl start V2bX && m_health || { m_diagnose; exit 1; }
     armed=false
-    printf '节点配置已保存，服务运行检查通过。备份：%s\n' "$backup"
+    m_line '1;32' '  ✓ 节点配置已保存，服务运行检查通过。'
+    m_line 36 "  备份：${backup}"
 )
 # Installation layout adapted from upstream install.sh (MPL-2.0).
 m_arch() {
@@ -581,7 +614,7 @@ m_node_field() {
     local key=$1 prompt=$2 secret=${3:-false} current
     current=$(jq -r --arg key "$key" 'getpath($key|split(".")) // ""' "$N_STAGE/node.after") || return 1
     if [[ $secret == true ]]; then
-        m_secret "${prompt}（回车保留，当前值隐藏）" || return 1
+        m_secret "${prompt}（直接显示，回车保留）" || return 1
     else
         printf '当前值：%s\n' "$(printf '%s' "$current" | jq -Rs .)"
         m_ask "${prompt}（回车保留）" || return 1
@@ -597,7 +630,7 @@ m_node_field() {
 m_edit_protocol() {
     local proto
     printf '当前协议：%s\n' "$(jq -r '.NodeType|@json' "$N_STAGE/node.after")"
-    m_ask '协议：1. Shadowsocks  2. VLESS  3. VMess  4. Hysteria  5. Hysteria2  6. Trojan  7. TUIC  8. AnyTLS（回车保留）' || return 1
+    m_protocol_options '请选择协议 [1-8]（回车保留）' || return 1
     [[ -n $M_REPLY ]] || return 0
     case $M_REPLY in 1) proto=shadowsocks;; 2) proto=vless;; 3) proto=vmess;; 4) proto=hysteria;; 5) proto=hysteria2;; 6) proto=trojan;; 7) proto=tuic;; 8) proto=anytls;; *) return 1;; esac
     case "$N_KIND:$proto" in
@@ -609,7 +642,7 @@ m_edit_protocol() {
 m_edit_tls() {
     local mode
     printf '当前证书模式：%s\n' "$(jq -r '.CertConfig.CertMode // "none"|@json' "$N_STAGE/node.after")"
-    m_ask '证书模式：1. none（含 Reality）  2. HTTP  3. DNS  4. 已有证书 file  5. 自签 self（回车保留）' || return 1
+    m_choose 'TLS 证书' '请选择证书模式 [1-5]（回车保留）' 'none（含 Reality）' HTTP DNS '已有证书 file' '自签 self' || return 1
     case $M_REPLY in '') return 0;; 1) mode=none;; 2) mode=http;; 3) mode=dns;; 4) mode=file;; 5) mode=self;; *) return 1;; esac
     m_node_set CertConfig.CertMode "$mode" || return 1
     [[ $mode != none ]] || return 0
@@ -623,7 +656,7 @@ m_edit_tls() {
         done
     elif [[ $mode == dns ]]; then
         m_node_field CertConfig.Provider 'DNS Provider' || return 1
-        m_secret 'DNS 环境参数 JSON（隐藏输入，回车保留）' || return 1
+        m_secret 'DNS 环境参数 JSON（直接显示，回车保留）' || return 1
         if [[ -n $M_REPLY ]]; then
             printf '%s' "$M_REPLY" | jq -e 'type=="object" and all(.[]; type=="string")' >/dev/null 2>&1 || return 1
             printf '%s' "$M_REPLY" | jq --slurpfile node "$N_STAGE/node.after" '. as $env | $node[0] | .CertConfig.DNSEnv=$env' > "$N_STAGE/node.next" &&
@@ -637,8 +670,10 @@ m_edit_existing() {
     m_node_core || return 1
     cp "$N_STAGE/node.before" "$N_STAGE/node.after" || return 1
     while true; do
-        printf '%s\n' '修改所选节点（其他配置保留）：' '1. 面板地址' '2. 面板 API Key' '3. 节点 ID' \
-            '4. 节点协议' '5. TLS / 证书' '6. 监听地址' '7. 出站源地址' '0. 完成修改' '9. 取消全部修改'
+        m_section '修改所选节点'
+        m_option 1 '面板地址'; m_option 2 '面板 API Key'; m_option 3 '节点 ID'
+        m_option 4 '节点协议'; m_option 5 'TLS / 证书'; m_option 6 '监听地址'; m_option 7 '出站源地址'
+        m_option 0 '完成修改'; m_option 9 '取消全部修改'
         m_ask '请选择修改项' || return 1; choice=$M_REPLY
         case $choice in
             1) m_node_field ApiHost '面板地址';; 2) m_node_field ApiKey '面板 API Key' true;;
@@ -839,7 +874,8 @@ m_edit() (
     trap 'exit 143' HUP TERM
     m_node_track "$M_CONFIG/config.json" || exit 1
     cp "$N_STAGE/0.before" "$N_STAGE/config.json" || exit 1
-    printf '%s\n' '节点配置管理' '1. 修改现有节点' '2. 新增节点' '3. 删除节点' '0. 返回'
+    m_section '节点配置管理'
+    m_option 1 '修改现有节点'; m_option 2 '新增节点'; m_option 3 '删除节点'; m_option 0 '返回'
     m_ask '请选择操作' || exit 1
     case $M_REPLY in
         0) exit 0;;
@@ -906,9 +942,9 @@ m_open_ports() {
     fi
 }
 m_show_status() {
-    local state line active='' sub='' load='' enabled='' status='未知（无法读取服务状态）' autostart='未知'
+    local state line active='' sub='' load='' enabled='' status='未知（无法读取服务状态）' autostart='未知' tone=33
     if ! m_installed; then
-        printf '\nV2bX 状态：未安装\n'
+        m_line 33 '  V2bX 状态：未安装'
         return 0
     fi
     if state=$(systemctl show V2bX --property=LoadState,ActiveState,SubState 2>/dev/null); then
@@ -936,18 +972,38 @@ m_show_status() {
         enabled-runtime) autostart='否（仅本次运行期间启用）';;
         disabled|static|indirect|masked|masked-runtime|not-found) autostart='否';;
     esac
-    printf '\nV2bX 状态：%s\n是否开机自启：%s\n\n' "$status" "$autostart"
+    case $status in 已运行) tone=32;; 启动失败|服务未注册) tone=31;; esac
+    m_line "$tone" "  V2bX 状态：${status}"
+    if [[ $autostart == 是 ]]; then tone=32; else tone=33; fi
+    m_line "$tone" "  是否开机自启：${autostart}"
 }
 m_menu() {
-    local choice version
+    local choice
     while true; do
-        printf '\nV2bX 安装与 SOCKS 出口管理 %s\n' "$MANAGER_VERSION"
-        printf '%s\n' '0. 修改配置（节点管理）' '1. 安装 V2bX' '2. 更新 V2bX 内核' '3. 卸载 V2bX' \
-          '4. 启动 V2bX' '5. 停止 V2bX' '6. 重启 V2bX' '7. 查看 V2bX 状态' '8. 查看日志' \
-          '9. 设置开机自启' '10. 取消开机自启' '11. 安装 BBR' '12. 查看 V2bX 版本' \
-          '13. 生成 X25519 密钥' '14. 更新管理工具（含 SOCKS 助手）' '15. 生成节点配置' \
-          '16. 放行所有网络端口' '17. 退出' '18. SOCKS 出口管理'
+        m_banner
         m_show_status
+        m_section '◇ 节点与出口'
+        m_option 0 '修改配置（节点管理）'
+        m_option 15 '生成节点配置'
+        m_option 18 'SOCKS 出口管理'
+        m_option 7 '查看 V2bX 状态'
+        m_option 8 '查看日志'
+        m_section '↻ 服务控制'
+        m_option 4 '启动 V2bX'
+        m_option 5 '停止 V2bX'
+        m_option 6 '重启 V2bX'
+        m_option 9 '设置开机自启'
+        m_option 10 '取消开机自启'
+        m_section '⚙ 安装与维护'
+        m_option 1 '安装 V2bX'
+        m_option 2 '更新 V2bX 内核'
+        m_option 14 '更新管理工具（含 SOCKS 助手）'
+        m_option 12 '查看 V2bX 版本'
+        m_option 13 '生成 X25519 密钥'
+        m_option 11 '安装 BBR'
+        m_option 16 '放行所有网络端口'
+        m_option 3 '卸载 V2bX'
+        printf '\n'; m_option 17 '退出 · 下次见'
         m_ask '请选择 [0-18]' || return 0; choice=$M_REPLY
         case $choice in
             0) m_edit;; 1) m_install_flow;;
@@ -958,7 +1014,7 @@ m_menu() {
             12) m_need_install && "$M_BINARY/V2bX" version;; 13) m_need_install && "$M_BINARY/V2bX" x25519;;
             14) m_update_tools && exec bash "$M_SELF";;
             15) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
-            16) m_open_ports;; 17) return 0;; 18) m_socks;; *) printf '请输入 0-18。\n';;
+            16) m_open_ports;; 17) return 0;; 18) m_socks;; *) m_line 33 '请输入 0-18。';;
         esac
     done
 }
