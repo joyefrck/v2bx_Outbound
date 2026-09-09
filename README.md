@@ -31,6 +31,9 @@ curl -fL --connect-timeout 15 --max-time 90 --retry 5 --retry-delay 3 -o install
 出现 `503 Backend.max_conn reached` 表示本次 HTTP 下载端暂时无法处理请求。入口下载成功后，安装器仍需获取提交号、校验清单和管理脚本，所以可能在后续下载再次遇到 503。
 安装器对每个地址最多尝试 4 次，间隔 2、4、6 秒；固定提交的 Raw 文件下载失败后，自动改用 GitHub 官方 Contents API 获取同一提交的原始文件，并继续校验 SHA256。最终失败会显示具体地址并保留旧工具。官方 API 也可能限流或故障，此时稍后重试；不需要修改节点配置。
 
+如果 Debian 11 在安装依赖时出现 `bullseye-backports` 404 或 `bullseye-security` 索引过期，管理工具会在原有 APT 更新失败后，改用临时官方软件源安装依赖。它不覆盖 `/etc/apt` 下的配置，不使用 backports；只对已停止更新的 `bullseye-security` 索引设置 `check-valid-until=no`，签名及软件包校验继续生效。临时源和索引用完清理，系统原有软件源仍需单独维护。
+Debian 11 官方 LTS 已于 2026-08-31 结束；此兼容处理不代表恢复安全更新，长期使用应安排升级系统。
+
 首次安装后按提示填写面板地址、API Key、内核、节点 ID 和协议。API Key、DNS 密钥和 SOCKS 密码输入时直接显示，便于核对；支持多个节点共用面板。
 可以暂时跳过节点配置，之后运行 `v2bx generate`。服务启动并稳定监听后，询问是否配置 SOCKS：**默认回车跳过**。
 跳过 SOCKS 不影响普通 V2bX 使用；之后随时运行 `v2bx socks`。
