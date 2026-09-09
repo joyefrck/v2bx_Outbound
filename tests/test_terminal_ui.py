@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import subprocess
 import time
@@ -44,6 +45,42 @@ def terminal(body, reply=b'', env=None):
 
 
 class TerminalUiTests(unittest.TestCase):
+    def test_body_and_prompts_use_muted_color_without_bold_white(self):
+        code, output = terminal("m_option 1 TEXT; m_ask INPUT", reply=b'ok\n')
+        self.assertEqual(code, 0)
+        self.assertIn('\033[38;5;109mTEXT', output)
+        self.assertIn('\033[38;5;109mINPUT', output)
+        self.assertNotIn('\033[1;37m', output)
+        self.assertNotIn('\033[37m', output)
+
+    def test_both_menus_have_consecutive_numbers(self):
+        for body, count in (("m_installed() { return 1; }; m_ask() { M_REPLY=19; }; m_menu", 19),
+                            ('source "$1/src/helper.sh"; show_menu', 7)):
+            code, output = terminal(body, env={'NO_COLOR': '1'})
+            self.assertEqual(code, 0)
+            numbers = [int(n) for n in re.findall(r'^  (\d+)\. ', output, re.M)]
+            self.assertEqual(numbers, list(range(1, count + 1)))
+
+    def test_socks_menu_numbers_dispatch_to_the_matching_operation(self):
+        for number, expected in enumerate(('configure', 'probe', 'config', 'status', 'restore', 'update', ''), 1):
+            body = '''
+source "$1/src/helper.sh"
+show_menu() { :; }
+ask() { REPLY=$selection; selection=7; }
+configure_menu() { echo ACTION:configure; }
+ask_endpoint() { echo ACTION:probe; }
+show_socks_config() { echo ACTION:config; }
+show_status() { echo ACTION:status; }
+restore_menu() { echo ACTION:restore; }
+update_helper() { echo ACTION:update; return 1; }
+selection=%d
+helper_menu
+''' % number
+            with self.subTest(number=number):
+                code, output = terminal(body, env={'NO_COLOR': '1'})
+                self.assertEqual(code, 0)
+                self.assertEqual(output.strip(), 'ACTION:' + expected if expected else '')
+
     def test_tty_has_semantic_colors(self):
         code, output = terminal("m_banner; m_line 32 'READY'; m_line 33 'WAIT'; m_error 'FAILED' || true")
         self.assertEqual(code, 0)
@@ -63,7 +100,7 @@ class TerminalUiTests(unittest.TestCase):
     def test_redirected_menu_and_choices_are_plain_and_one_per_line(self):
         body = '''
 source "$1/v2bx-manager.sh"
-m_ask() { M_REPLY=17; }
+m_ask() { M_REPLY=19; }
 m_installed() { return 1; }
 m_menu
 m_protocol_options '协议'
@@ -73,7 +110,7 @@ m_protocol_options '协议'
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('\033[', result.stdout)
         for text in ('  1. Shadowsocks\n', '  2. VLESS\n', '  8. AnyTLS\n',
-                     '  18. SOCKS 出口管理\n', '节点与出口', '服务控制', '安装与维护'):
+                     '  3. SOCKS 出口管理\n', '节点与出口', '服务控制', '安装与维护'):
             self.assertIn(text, result.stdout)
         self.assertLess(result.stdout.index('V2bX 状态'), result.stdout.index('节点与出口'))
 

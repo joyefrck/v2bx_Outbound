@@ -58,13 +58,13 @@ systemctl() {
     esac
 }
 m_menu
-''' % ('%s', load, active, sub, enabled, enabled), '17\n')
+''' % ('%s', load, active, sub, enabled, enabled), '19\n')
                 self.assertIn('V2bX 状态：' + status, r.stdout)
                 self.assertIn('是否开机自启：' + autostart, r.stdout)
-        r = self.run_shell('m_installed() { return 1; }; systemctl() { echo unexpected; }; m_menu', '17\n')
+        r = self.run_shell('m_installed() { return 1; }; systemctl() { echo unexpected; }; m_menu', '19\n')
         self.assertIn('V2bX 状态：未安装', r.stdout)
         self.assertNotIn('unexpected', r.stdout)
-        r = self.run_shell('m_installed() { return 0; }; systemctl() { return 1; }; m_menu', '17\n')
+        r = self.run_shell('m_installed() { return 0; }; systemctl() { return 1; }; m_menu', '19\n')
         self.assertIn('V2bX 状态：未知', r.stdout)
         self.assertIn('是否开机自启：未知', r.stdout)
 
@@ -81,9 +81,47 @@ systemctl() {
 }
 m_service() { [[ $1 == stop ]] || return 1; fixture_active=inactive; fixture_sub=dead; }
 m_menu
-''', '5\n17\n')
+''', '7\n19\n')
         self.assertEqual(r.stdout.count('V2bX 状态：'), 2)
         self.assertLess(r.stdout.index('V2bX 状态：已运行'), r.stdout.index('V2bX 状态：未运行'))
+
+    def test_every_new_menu_number_dispatches_to_its_displayed_action(self):
+        binary = self.binary / 'V2bX'
+        binary.write_text('#!/bin/bash\nprintf "ACTION:binary:%s\\n" "$1"\n')
+        binary.chmod(0o755)
+        (self.cfg / 'config.json').write_text('{}')
+        actions = {
+            1: ['edit'], 2: ['generate', 'offer-socks'], 3: ['socks'],
+            4: ['status'], 5: ['log'], 6: ['start'], 7: ['stop'], 8: ['restart'],
+            9: ['enable'], 10: ['disable'], 11: ['install'], 12: ['core:fixture-version'],
+            13: ['tools'], 14: ['binary:version'], 15: ['binary:x25519'],
+            16: ['bbr'], 17: ['ports'], 18: ['uninstall'], 19: [], 0: [],
+        }
+        body = '''
+m_show_status() { :; }
+m_need_install() { return 0; }
+m_edit() { echo ACTION:edit; }
+m_generate() { echo ACTION:generate; }
+m_offer_socks() { echo ACTION:offer-socks; }
+m_socks() { echo ACTION:socks; }
+systemctl() { echo ACTION:status; }
+journalctl() { echo ACTION:log; }
+m_service() { echo "ACTION:$1"; }
+m_install_flow() { echo ACTION:install; }
+m_install_core() { echo "ACTION:core:$1"; }
+m_update_tools() { echo ACTION:tools; return 1; }
+m_bbr() { echo ACTION:bbr; }
+m_open_ports() { echo ACTION:ports; }
+m_uninstall() { echo ACTION:uninstall; }
+m_menu
+'''
+        for number, expected in actions.items():
+            with self.subTest(number=number):
+                inputs = str(number) + '\n' + ('fixture-version\n' if number == 12 else '') + '19\n'
+                result = self.run_shell(body, inputs)
+                actual = [line.removeprefix('ACTION:') for line in result.stdout.splitlines()
+                          if line.startswith('ACTION:')]
+                self.assertEqual(actual, expected)
 
     def test_existing_install_never_installs_or_generates(self):
         result = self.run_shell('''
@@ -300,12 +338,12 @@ install_tools "$2/V2bX" "$2/helper" "$2/aliases/v2bx" "$2/LICENSE" https://fixtu
         self.assertEqual(self.alias.resolve(), self.manager.resolve())
         menu = subprocess.run(['bash', '-c', '''
 source "$1"
-m_ask() { M_REPLY=17; }
+m_ask() { M_REPLY=19; }
 m_installed() { return 1; }
 m_menu
 ''', 'installed-menu-test', str(self.manager)], capture_output=True, text=True, timeout=5)
         self.assertEqual(menu.returncode, 0, menu.stderr)
-        self.assertIn('18. SOCKS', menu.stdout)
+        self.assertIn('3. SOCKS', menu.stdout)
 
     def test_bad_second_payload_preserves_both_old_commands(self):
         before = self.manager.read_bytes(), self.helper.read_bytes()

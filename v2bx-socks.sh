@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.4 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.5 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.4.0
+VERSION=2.5.0
 HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false
@@ -12,8 +12,15 @@ SELF_PATH='' RELOAD_HELPER=false
 JOB_DIR='' BACKGROUND_SUBMITTED=false
 
 ui_paint() {
+    local tone=$1
+    # Muted blue-grey body text, without bold white prompts.
+    case $tone in 37|'1;37')
+        if [[ ${TERM:-} == *256color* || ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit ]]; then
+            tone='38;5;109'
+        else tone=36; fi;;
+    esac
     if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR+x} ]]; then
-        printf '\033[%sm%s\033[0m' "$1" "$2"
+        printf '\033[%sm%s\033[0m' "$tone" "$2"
     else printf '%s' "$2"; fi
 }
 ui_line() { ui_paint "$1" "$2"; printf '\n'; }
@@ -41,12 +48,12 @@ show_menu() {
     ui_section '◇ 出口与连接'
     ui_option 1 '配置 / 更换一个节点的 SOCKS 出口'
     ui_option 2 '只测试 SOCKS（不改配置）'
-    ui_option 5 '查看 SOCKS 出口配置'
+    ui_option 3 '查看 SOCKS 出口配置'
     ui_section '↻ 状态与维护'
     ui_option 4 '查看节点与服务状态'
-    ui_option 3 '恢复修改前的配置'
+    ui_option 5 '恢复修改前的配置'
     ui_option 6 '检查 / 更新助手'
-    printf '\n'; ui_option 0 '退出 · 下次见'
+    printf '\n'; ui_option 7 '退出 · 下次见'
 }
 
 hash_file() {
@@ -390,7 +397,7 @@ rollback() {
     [[ -n $TX_DIR && -f $TX_DIR/manifest.json ]] || return 0
     status=$(jq -r '.status' "$TX_DIR/manifest.json") || return 1
     [[ $status != applied && $status != rolled_back && $status != cancelled && $status != restored ]] || { TX_DIR=''; TX_ARMED=false; return 0; }
-    service_stop || { fail "无法停止服务，请从菜单 3 恢复备份：$TX_DIR"; return 1; }
+    service_stop || { fail "无法停止服务，请从菜单 5 恢复备份：$TX_DIR"; return 1; }
     if [[ $status == prepared ]]; then
         tx_status cancelled || return 1
         say '未写入配置，已取消本次应用。'
@@ -398,7 +405,7 @@ rollback() {
         say '已恢复修改前的配置。'
     else
         tx_status recovery_required || true
-        fail "自动恢复未完成，服务保持停止。请核对配置并通过菜单 3 恢复：$TX_DIR"; return 1
+        fail "自动恢复未完成，服务保持停止。请核对配置并通过菜单 5 恢复：$TX_DIR"; return 1
     fi
     service_start_check || say '原配置已保留，但服务尚未稳定运行，请检查面板和节点。'
     TX_DIR=''
@@ -440,7 +447,7 @@ pending_check() {
     backup_list || return 1
     [[ ${#BACKUPS[@]} -gt 0 ]] || return 0
     for dir in "${BACKUPS[@]}"; do
-        [[ $(jq -r '.status' "$dir/manifest.json") == applied ]] || { fail '发现未完成的操作，请先选择 3 恢复备份。'; return 1; }
+        [[ $(jq -r '.status' "$dir/manifest.json") == applied ]] || { fail '发现未完成的操作，请先选择 5 恢复备份。'; return 1; }
     done
 }
 restore_menu() {
@@ -469,7 +476,7 @@ restore_candidate() {
     if ! restore_check "$interrupted"; then service_start_check || true; TX_DIR=''; return 1; fi
     if ! tx_status restoring || ! restore_files || ! tx_status restored; then
         tx_status recovery_required || true
-        fail "恢复尚未完成，服务保持停止。重新运行并选择 3 继续恢复：$TX_DIR"
+        fail "恢复尚未完成，服务保持停止。重新运行并选择 5 继续恢复：$TX_DIR"
         TX_DIR=''; return 1
     fi
     TX_DIR=''
@@ -637,7 +644,7 @@ show_job() {
     elif job_active "$dir"; then
         say '结果：正在后台处理。SSH 断开不影响任务，请稍后运行 v2bx-socks --last-job。'
     else
-        say '结果：未确认完成，任务可能未启动或被中断。请查看服务状态；如有未完成备份，用菜单 3 恢复。'
+        say '结果：未确认完成，任务可能未启动或被中断。请查看服务状态；如有未完成备份，用菜单 5 恢复。'
     fi
 }
 show_last_job() {
@@ -850,6 +857,21 @@ V2bX 中文 SOCKS 出口助手 2.3（轻量版）
 无需 Python，不会安装、升级或重装 V2bX。
 HELP
 }
+helper_menu() {
+    local choice
+    while true; do
+        show_menu
+        ask '请选择 [1-7]' 7 || return 1; choice=$REPLY
+        case $choice in
+            7) return 0;; 1) configure_menu || true;; 2) ask_endpoint || true;;
+            5) restore_menu || true;; 4) show_status || true;; 3) show_socks_config || true;;
+            6) if update_helper && [[ $RELOAD_HELPER == true ]]; then return 0; fi;;
+            *) say '请输入菜单中的数字。';;
+        esac
+        if [[ $BACKGROUND_SUBMITTED == true ]]; then wait_job; return 0; fi
+    done
+}
+
 main() {
     local item missing=() choice
     if [[ ${1:-} == --worker && $# == 2 ]]; then [[ $EUID == 0 ]] || return 1; job_worker "$2"; return $?; fi
@@ -885,17 +907,7 @@ main() {
     exec 8>"${CONFIG_PATH%/*}/.v2bx-socks.lock" || return 1
     flock -n 8 || { fail '另一个出口助手正在运行，请先关闭它。'; return 1; }
     check_running_jobs || return 1
-    while true; do
-        show_menu
-        ask '请选择' 0 || return 1; choice=$REPLY
-        case $choice in
-            0) return 0;; 1) configure_menu || true;; 2) ask_endpoint || true;;
-            3) restore_menu || true;; 4) show_status || true;; 5) show_socks_config || true;;
-            6) if update_helper && [[ $RELOAD_HELPER == true ]]; then return 0; fi;;
-            *) say '请输入菜单中的数字。';;
-        esac
-        if [[ $BACKGROUND_SUBMITTED == true ]]; then wait_job; return 0; fi
-    done
+    helper_menu
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

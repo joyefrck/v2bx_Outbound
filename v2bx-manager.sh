@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.3.0
+MANAGER_VERSION=3.4.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -9,8 +9,15 @@ M_HELPER=/usr/local/bin/v2bx-socks
 M_SELF=/usr/bin/V2bX
 
 m_paint() {
+    local tone=$1
+    # Muted blue-grey body text, without bold white prompts.
+    case $tone in 37|'1;37')
+        if [[ ${TERM:-} == *256color* || ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit ]]; then
+            tone='38;5;109'
+        else tone=36; fi;;
+    esac
     if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR+x} ]]; then
-        printf '\033[%sm%s\033[0m' "$1" "$2"
+        printf '\033[%sm%s\033[0m' "$tone" "$2"
     else printf '%s' "$2"; fi
 }
 m_line() { m_paint "$1" "$2"; printf '\n'; }
@@ -63,7 +70,7 @@ m_dependencies() {
     for c in jq curl unzip ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || return 1; done
 }
 m_installed() { [[ -x $M_BINARY/V2bX ]]; }
-m_need_install() { m_installed || { m_error '请先使用菜单 1 安装 V2bX。'; return 1; }; }
+m_need_install() { m_installed || { m_error '请先使用菜单 11 安装 V2bX。'; return 1; }; }
 m_health() {
     bash -c '
         source "$1"
@@ -673,13 +680,13 @@ m_edit_existing() {
         m_section '修改所选节点'
         m_option 1 '面板地址'; m_option 2 '面板 API Key'; m_option 3 '节点 ID'
         m_option 4 '节点协议'; m_option 5 'TLS / 证书'; m_option 6 '监听地址'; m_option 7 '出站源地址'
-        m_option 0 '完成修改'; m_option 9 '取消全部修改'
+        m_option 8 '完成修改'; m_option 9 '取消全部修改'
         m_ask '请选择修改项' || return 1; choice=$M_REPLY
         case $choice in
             1) m_node_field ApiHost '面板地址';; 2) m_node_field ApiKey '面板 API Key' true;;
             3) m_node_field NodeID '节点 ID';; 4) m_edit_protocol;; 5) m_edit_tls;;
             6) m_node_field ListenIP '监听 IP 地址';; 7) m_node_field SendIP '出站源 IP 地址';;
-            0) break;; 9) return 2;; *) m_error '请选择菜单中的数字。'; return 1;;
+            8) break;; 9) return 2;; *) m_error '请选择菜单中的数字。'; return 1;;
         esac || return 1
     done
     if jq -e --slurpfile before "$N_STAGE/node.before" '.==$before[0]' "$N_STAGE/node.after" >/dev/null; then
@@ -709,7 +716,7 @@ m_add_existing_core() {
     local candidate="$N_STAGE/new-nodes" kind file count position ref choice total
     local required=()
     mkdir "$candidate" || return 1
-    printf '使用与菜单 15 相同的节点填写向导；完成后只追加新节点，保留原有节点和出口配置。\n'
+    printf '使用与菜单 2 相同的节点填写向导；完成后只追加新节点，保留原有节点和出口配置。\n'
     m_collect_nodes "$candidate" || return 1
     jq -s . "$candidate/nodes.jsonl" > "$candidate/batch.json" || return 1
     total=$(jq length "$candidate/batch.json") || return 1
@@ -875,10 +882,10 @@ m_edit() (
     m_node_track "$M_CONFIG/config.json" || exit 1
     cp "$N_STAGE/0.before" "$N_STAGE/config.json" || exit 1
     m_section '节点配置管理'
-    m_option 1 '修改现有节点'; m_option 2 '新增节点'; m_option 3 '删除节点'; m_option 0 '返回'
+    m_option 1 '修改现有节点'; m_option 2 '新增节点'; m_option 3 '删除节点'; m_option 4 '返回'
     m_ask '请选择操作' || exit 1
     case $M_REPLY in
-        0) exit 0;;
+        4) exit 0;;
         1|3)
             action=$M_REPLY
             code=0; m_select_node "$N_STAGE/config.json" || code=$?
@@ -894,11 +901,11 @@ m_edit() (
                 printf '将删除所选节点及其由 SOCKS 助手生成的出口规则。\n'
             fi;;
         2) m_add_existing_core || exit 1;;
-        *) m_error '请选择 0、1、2 或 3。'; exit 1;;
+        *) m_error '请选择 1、2、3 或 4。'; exit 1;;
     esac
     m_nodes_validate && m_nodes_save
 )
-# Menu numbers and CLI compatibility adapted from upstream V2bX.sh (MPL-2.0).
+# CLI compatibility adapted from upstream V2bX.sh (MPL-2.0); menu numbers follow display order.
 m_update_tools() (
     stage=''; commit=''; base=''; file=''; expected=''
     umask 077
@@ -983,38 +990,38 @@ m_menu() {
         m_banner
         m_show_status
         m_section '◇ 节点与出口'
-        m_option 0 '修改配置（节点管理）'
-        m_option 15 '生成节点配置'
-        m_option 18 'SOCKS 出口管理'
-        m_option 7 '查看 V2bX 状态'
-        m_option 8 '查看日志'
+        m_option 1 '修改配置（节点管理）'
+        m_option 2 '生成节点配置'
+        m_option 3 'SOCKS 出口管理'
+        m_option 4 '查看 V2bX 状态'
+        m_option 5 '查看日志'
         m_section '↻ 服务控制'
-        m_option 4 '启动 V2bX'
-        m_option 5 '停止 V2bX'
-        m_option 6 '重启 V2bX'
+        m_option 6 '启动 V2bX'
+        m_option 7 '停止 V2bX'
+        m_option 8 '重启 V2bX'
         m_option 9 '设置开机自启'
         m_option 10 '取消开机自启'
         m_section '⚙ 安装与维护'
-        m_option 1 '安装 V2bX'
-        m_option 2 '更新 V2bX 内核'
-        m_option 14 '更新管理工具（含 SOCKS 助手）'
-        m_option 12 '查看 V2bX 版本'
-        m_option 13 '生成 X25519 密钥'
-        m_option 11 '安装 BBR'
-        m_option 16 '放行所有网络端口'
-        m_option 3 '卸载 V2bX'
-        printf '\n'; m_option 17 '退出 · 下次见'
-        m_ask '请选择 [0-18]' || return 0; choice=$M_REPLY
+        m_option 11 '安装 V2bX'
+        m_option 12 '更新 V2bX 内核'
+        m_option 13 '更新管理工具（含 SOCKS 助手）'
+        m_option 14 '查看 V2bX 版本'
+        m_option 15 '生成 X25519 密钥'
+        m_option 16 '安装 BBR'
+        m_option 17 '放行所有网络端口'
+        m_option 18 '卸载 V2bX'
+        printf '\n'; m_option 19 '退出 · 下次见'
+        m_ask '请选择 [1-19]' || return 0; choice=$M_REPLY
         case $choice in
-            0) m_edit;; 1) m_install_flow;;
-            2) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
-            3) m_uninstall;; 4) m_service start;; 5) m_service stop;; 6) m_service restart;;
-            7) systemctl status V2bX --no-pager;; 8) journalctl -u V2bX -n 100 --no-pager;;
-            9) m_service enable;; 10) m_service disable;; 11) m_bbr;;
-            12) m_need_install && "$M_BINARY/V2bX" version;; 13) m_need_install && "$M_BINARY/V2bX" x25519;;
-            14) m_update_tools && exec bash "$M_SELF";;
-            15) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
-            16) m_open_ports;; 17) return 0;; 18) m_socks;; *) m_line 33 '请输入 0-18。';;
+            1) m_edit;; 11) m_install_flow;;
+            12) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
+            18) m_uninstall;; 6) m_service start;; 7) m_service stop;; 8) m_service restart;;
+            4) systemctl status V2bX --no-pager;; 5) journalctl -u V2bX -n 100 --no-pager;;
+            9) m_service enable;; 10) m_service disable;; 16) m_bbr;;
+            14) m_need_install && "$M_BINARY/V2bX" version;; 15) m_need_install && "$M_BINARY/V2bX" x25519;;
+            13) m_update_tools && exec bash "$M_SELF";;
+            2) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
+            17) m_open_ports;; 19) return 0;; 3) m_socks;; *) m_line 33 '请输入 1-19。';;
         esac
     done
 }

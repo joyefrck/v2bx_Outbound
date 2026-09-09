@@ -99,13 +99,13 @@ m_edit_existing() {
         m_section '修改所选节点'
         m_option 1 '面板地址'; m_option 2 '面板 API Key'; m_option 3 '节点 ID'
         m_option 4 '节点协议'; m_option 5 'TLS / 证书'; m_option 6 '监听地址'; m_option 7 '出站源地址'
-        m_option 0 '完成修改'; m_option 9 '取消全部修改'
+        m_option 8 '完成修改'; m_option 9 '取消全部修改'
         m_ask '请选择修改项' || return 1; choice=$M_REPLY
         case $choice in
             1) m_node_field ApiHost '面板地址';; 2) m_node_field ApiKey '面板 API Key' true;;
             3) m_node_field NodeID '节点 ID';; 4) m_edit_protocol;; 5) m_edit_tls;;
             6) m_node_field ListenIP '监听 IP 地址';; 7) m_node_field SendIP '出站源 IP 地址';;
-            0) break;; 9) return 2;; *) m_error '请选择菜单中的数字。'; return 1;;
+            8) break;; 9) return 2;; *) m_error '请选择菜单中的数字。'; return 1;;
         esac || return 1
     done
     if jq -e --slurpfile before "$N_STAGE/node.before" '.==$before[0]' "$N_STAGE/node.after" >/dev/null; then
@@ -135,7 +135,7 @@ m_add_existing_core() {
     local candidate="$N_STAGE/new-nodes" kind file count position ref choice total
     local required=()
     mkdir "$candidate" || return 1
-    printf '使用与菜单 15 相同的节点填写向导；完成后只追加新节点，保留原有节点和出口配置。\n'
+    printf '使用与菜单 2 相同的节点填写向导；完成后只追加新节点，保留原有节点和出口配置。\n'
     m_collect_nodes "$candidate" || return 1
     jq -s . "$candidate/nodes.jsonl" > "$candidate/batch.json" || return 1
     total=$(jq length "$candidate/batch.json") || return 1
@@ -301,10 +301,10 @@ m_edit() (
     m_node_track "$M_CONFIG/config.json" || exit 1
     cp "$N_STAGE/0.before" "$N_STAGE/config.json" || exit 1
     m_section '节点配置管理'
-    m_option 1 '修改现有节点'; m_option 2 '新增节点'; m_option 3 '删除节点'; m_option 0 '返回'
+    m_option 1 '修改现有节点'; m_option 2 '新增节点'; m_option 3 '删除节点'; m_option 4 '返回'
     m_ask '请选择操作' || exit 1
     case $M_REPLY in
-        0) exit 0;;
+        4) exit 0;;
         1|3)
             action=$M_REPLY
             code=0; m_select_node "$N_STAGE/config.json" || code=$?
@@ -320,7 +320,7 @@ m_edit() (
                 printf '将删除所选节点及其由 SOCKS 助手生成的出口规则。\n'
             fi;;
         2) m_add_existing_core || exit 1;;
-        *) m_error '请选择 0、1、2 或 3。'; exit 1;;
+        *) m_error '请选择 1、2、3 或 4。'; exit 1;;
     esac
     m_nodes_validate && m_nodes_save
 )

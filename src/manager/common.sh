@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.3.0
+MANAGER_VERSION=3.4.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -9,8 +9,15 @@ M_HELPER=/usr/local/bin/v2bx-socks
 M_SELF=/usr/bin/V2bX
 
 m_paint() {
+    local tone=$1
+    # Muted blue-grey body text, without bold white prompts.
+    case $tone in 37|'1;37')
+        if [[ ${TERM:-} == *256color* || ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit ]]; then
+            tone='38;5;109'
+        else tone=36; fi;;
+    esac
     if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR+x} ]]; then
-        printf '\033[%sm%s\033[0m' "$1" "$2"
+        printf '\033[%sm%s\033[0m' "$tone" "$2"
     else printf '%s' "$2"; fi
 }
 m_line() { m_paint "$1" "$2"; printf '\n'; }
@@ -63,7 +70,7 @@ m_dependencies() {
     for c in jq curl unzip ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || return 1; done
 }
 m_installed() { [[ -x $M_BINARY/V2bX ]]; }
-m_need_install() { m_installed || { m_error '请先使用菜单 1 安装 V2bX。'; return 1; }; }
+m_need_install() { m_installed || { m_error '请先使用菜单 11 安装 V2bX。'; return 1; }; }
 m_health() {
     bash -c '
         source "$1"

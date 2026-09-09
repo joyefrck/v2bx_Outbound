@@ -58,7 +58,7 @@ m_health() { return 0; }
         code = self.setup_nodes(named=True)
         before = json.loads(self.config.read_text())
         routes = self.route.read_bytes(), self.out.read_bytes()
-        result = self.run_shell(code+'m_edit', '1\n2\ny\n3\n25\n0\ny\n')
+        result = self.run_shell(code+'m_edit', '1\n2\ny\n3\n25\n8\ny\n')
         after = json.loads(self.config.read_text())
         self.assertEqual(after['Nodes'][0], before['Nodes'][0])
         self.assertEqual(after['Nodes'][1]['NodeID'], 25)
@@ -72,7 +72,7 @@ m_health() { return 0; }
     def test_blank_value_keeps_node_and_does_not_restart(self):
         code = self.setup_nodes()
         original = self.config.read_bytes()
-        self.run_shell(code+'m_edit', '1\n1\ny\n3\n\n2\n\n0\n')
+        self.run_shell(code+'m_edit', '1\n1\ny\n3\n\n2\n\n8\n')
         self.assertEqual(self.config.read_bytes(), original)
         self.assertFalse((self.cfg/'calls').exists())
 
@@ -87,7 +87,7 @@ m_health() { return 0; }
     def test_duplicate_panel_node_rejected(self):
         code = self.setup_nodes()
         original = self.config.read_bytes()
-        r = self.run_shell(code+'m_edit', '1\n2\ny\n3\n1\n0\ny\n', check=False)
+        r = self.run_shell(code+'m_edit', '1\n2\ny\n3\n1\n8\ny\n', check=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.config.read_bytes(), original)
 
@@ -158,7 +158,7 @@ m_health() { return 0; }
     def test_secret_update_is_escaped_and_never_displayed(self):
         code = self.setup_nodes()
         secret = 'fixture-"new\\secret'
-        r = self.run_shell(code+'m_edit', '1\n1\ny\n2\n'+secret+'\n0\ny\n')
+        r = self.run_shell(code+'m_edit', '1\n1\ny\n2\n'+secret+'\n8\ny\n')
         self.assertEqual(json.loads(self.config.read_text())['Nodes'][0]['ApiKey'], secret)
         self.assertNotIn(secret, r.stdout+r.stderr)
 
