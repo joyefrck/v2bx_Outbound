@@ -13,15 +13,44 @@ cleanup_install() {
     fi
 }
 download_file() {
-    local url=$1 output=$2
+    local url=$1 output=$2 endpoint=$1 fallback='' downloader retry_index
+    local accept='application/vnd.github+json' downloaded
     if command -v curl >/dev/null 2>&1; then
-        curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
-            --connect-timeout 15 --max-time 90 --retry 2 --output "$output" "$url"
+        downloader=curl
     elif command -v wget >/dev/null 2>&1; then
-        wget --https-only --timeout=30 --tries=3 -q -O "$output" "$url"
+        downloader=wget
     else
-        install_error '请先安装 curl 或 wget。'
+        install_error '请先安装 curl 或 wget。'; return 1
     fi
+    # Never fall back to a moving branch: payloads and checksums must use one commit.
+    if [[ $url =~ ^https://raw\.githubusercontent\.com/joyefrck/v2bx_Outbound/([0-9a-f]{40})/([A-Za-z0-9._/-]+)$ ]]; then
+        fallback="https://api.github.com/repos/joyefrck/v2bx_Outbound/contents/${BASH_REMATCH[2]}?ref=${BASH_REMATCH[1]}"
+    fi
+    while :; do
+        for ((retry_index=1;retry_index<=4;retry_index++)); do
+            printf '正在下载（%s/4）：%s\n' "$retry_index" "$endpoint" >&2
+            downloaded=false
+            if [[ $downloader == curl ]]; then
+                if curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+                    --connect-timeout 15 --max-time 90 --header "Accept: $accept" \
+                    --output "$output" "$endpoint"; then downloaded=true; fi
+            else
+                # Retry HTTP failures here; older wget versions do not retry 503 by default.
+                if wget --https-only --timeout=30 --tries=1 --header "Accept: $accept" \
+                    -O "$output" "$endpoint"; then downloaded=true; fi
+            fi
+            if [[ $downloaded == true && -s $output ]]; then return 0; fi
+            rm -f -- "$output" || return 1
+            if ((retry_index < 4)); then
+                printf '下载未成功，%s 秒后重试。\n' "$((retry_index * 2))" >&2
+                sleep "$((retry_index * 2))" || return 1
+            fi
+        done
+        [[ -n $fallback ]] || break
+        printf 'Raw 下载失败，切换 GitHub 官方 API（同一提交）。\n' >&2
+        endpoint=$fallback; fallback=''; accept='application/vnd.github.raw+json'
+    done
+    install_error "下载失败：${url}；请稍后重试或检查服务器到 GitHub 的连接。"
 }
 install_hash() {
     if command -v sha256sum >/dev/null 2>&1; then

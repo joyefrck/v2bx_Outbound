@@ -8,14 +8,28 @@
 在 Debian/Ubuntu、CentOS/Rocky/Alma 系列的 systemd Linux 服务器上，以 root 执行：
 
 ```bash
-curl -fL --retry 2 -o install-v2bx.sh https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && bash install-v2bx.sh
+curl -fL --connect-timeout 15 --max-time 90 --retry 5 --retry-delay 3 -o install-v2bx.sh.tmp https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && test -s install-v2bx.sh.tmp && bash -n install-v2bx.sh.tmp && mv install-v2bx.sh.tmp install-v2bx.sh && bash install-v2bx.sh
 ```
 
 只有 wget 时：
 
 ```bash
-wget -O install-v2bx.sh https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && bash install-v2bx.sh
+(
+  for attempt in 1 2 3 4 5 6; do
+    if wget --https-only --timeout=30 --tries=1 -O install-v2bx.sh.tmp https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/main/install.sh && test -s install-v2bx.sh.tmp && bash -n install-v2bx.sh.tmp; then
+      mv install-v2bx.sh.tmp install-v2bx.sh && bash install-v2bx.sh
+      exit $?
+    fi
+    [ "$attempt" = 6 ] || sleep 3
+  done
+  rm -f install-v2bx.sh.tmp
+  echo '安装入口下载失败，请稍后重试。' >&2
+  exit 1
+)
 ```
+
+出现 `503 Backend.max_conn reached` 表示本次 HTTP 下载端暂时无法处理请求。入口下载成功后，安装器仍需获取提交号、校验清单和管理脚本，所以可能在后续下载再次遇到 503。
+安装器对每个地址最多尝试 4 次，间隔 2、4、6 秒；固定提交的 Raw 文件下载失败后，自动改用 GitHub 官方 Contents API 获取同一提交的原始文件，并继续校验 SHA256。最终失败会显示具体地址并保留旧工具。官方 API 也可能限流或故障，此时稍后重试；不需要修改节点配置。
 
 首次安装后按提示填写面板地址、API Key、内核、节点 ID 和协议。API Key 隐藏输入；支持多个节点共用面板。
 可以暂时跳过节点配置，之后运行 `v2bx generate`。服务启动并稳定监听后，询问是否配置 SOCKS：**默认回车跳过**。
