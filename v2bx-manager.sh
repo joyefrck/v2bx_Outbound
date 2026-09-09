@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.4.1
+MANAGER_VERSION=3.4.2
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -60,15 +60,15 @@ m_apt_dependencies() (
     local packages=(jq curl unzip ca-certificates iproute2 util-linux coreutils socat cron)
     local options=(-o APT::Update::Error-Mode=any -o Acquire::Retries=2
         -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
-    if apt-get "${options[@]}" update; then
-        apt-get "${options[@]}" install -y --no-remove --no-install-recommends "${packages[@]}"
-        return $?
+    if apt-get "${options[@]}" update &&
+       apt-get "${options[@]}" install -y --no-remove --no-install-recommends "${packages[@]}"; then
+        return 0
     fi
     if [[ $distro != debian || $version != 11 ]]; then
-        m_error '系统软件源更新失败，依赖尚未安装；请先修复 APT 软件源后重试。'; return 1
+        m_error 'APT 依赖安装失败；请检查上方报错并修复软件源后重试。'; return 1
     fi
-    m_line 33 'Debian 11 软件源更新失败；改用临时官方软件源安装依赖。'
-    m_line 33 'Debian 11 已结束官方 LTS；安全源使用最后发布的索引，仍验证签名。'
+    m_line 33 'Debian 11 依赖安装失败；改用临时官方软件源及安全更新快照。'
+    m_line 33 'Debian 11 已结束官方 LTS；使用 2026-08-31 安全更新快照，仍验证签名。'
     m_line 37 '此操作不覆盖 /etc/apt 的软件源配置；不使用已撤下的 backports。'
     stage=$(mktemp -d "${TMPDIR:-/tmp}/v2bx-apt.XXXXXX") || return 1
     trap 'rm -rf -- "$stage"' EXIT
@@ -77,10 +77,12 @@ m_apt_dependencies() (
     chmod 755 "$stage" || return 1
     mkdir -p "$stage/lists/partial" || return 1
     # Bullseye LTS ended 2026-08-31; its last security index expired 2026-09-07.
-    # The exception applies only to this retired suite, never to all APT sources.
+    # Pin both the security index and its package pool. The live CDN can return
+    # 404 for APT's percent-encoded package URLs even while its index still exists.
+    # The validity exception applies only to this snapshot, never to all APT sources.
     cat > "$stage/sources.list" <<'SOURCES'
 deb https://deb.debian.org/debian bullseye main
-deb [check-valid-until=no] https://security.debian.org/debian-security bullseye-security main
+deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260831T235959Z/ bullseye-security main
 SOURCES
     chmod 644 "$stage/sources.list" || return 1
     options+=(-o "Dir::Etc::sourcelist=$stage/sources.list" -o Dir::Etc::sourceparts=-

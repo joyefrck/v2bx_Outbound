@@ -25,7 +25,9 @@ apt-get() {
     done
     printf 'APT:%s:%s\n' "$action" "${sources:+isolated}"
     if [[ -z $sources ]]; then
-        [[ $mode == normal ]] || return 100
+        if [[ $mode == normal ]]; then return 0; fi
+        if [[ $mode == install-404 && $action == update ]]; then return 0; fi
+        return 100
     else
         [[ -d $lists ]] || return 91
         cat "$sources"
@@ -49,9 +51,15 @@ m_apt_dependencies "$2" "$3"
         self.assertIn('APT:update:isolated', result.stdout)
         self.assertIn('APT:install:isolated', result.stdout)
         self.assertIn('https://deb.debian.org/debian bullseye main', result.stdout)
-        self.assertIn('deb [check-valid-until=no] https://security.debian.org/debian-security bullseye-security main', result.stdout)
+        self.assertIn('deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260831T235959Z/ bullseye-security main', result.stdout)
+        self.assertNotIn('https://security.debian.org/', result.stdout)
         self.assertNotIn('trusted=yes', result.stdout)
         self.assertNotIn('bullseye-backports', result.stdout)
+
+    def test_package_404_after_successful_update_also_recovers(self):
+        result = self.run_apt(mode='install-404')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('APT:install:isolated', result.stdout)
 
     def test_other_systems_do_not_use_bullseye_sources(self):
         for distro, version in (('debian', '12'), ('ubuntu', '22.04')):

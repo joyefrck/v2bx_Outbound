@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  bullseye-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install real Debian 11 dependencies on AMD64
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD:/workspace:ro" -w /workspace \
+            python:3.10-slim-bullseye bash tests/runtime_bullseye_dependencies.sh
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
