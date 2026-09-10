@@ -77,6 +77,16 @@ m_show_status() {
     if [[ $autostart == 是 ]]; then tone=32; else tone=33; fi
     m_line "$tone" "  是否开机自启：${autostart}"
 }
+m_logs() (
+    # Catch Ctrl+C in this viewing session so it does not close the parent menu.
+    trap ':' INT
+    local code
+    m_line 37 "正在持续查看最近 100 条及新增日志；按 Ctrl+C ${1:-结束查看}。"
+    journalctl -u V2bX -n 100 --no-pager -f
+    code=$?
+    [[ $code == 130 ]] && return 0
+    return "$code"
+)
 m_menu() {
     local choice
     while true; do
@@ -109,7 +119,7 @@ m_menu() {
             1) m_edit;; 11) m_install_flow;;
             12) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
             18) m_uninstall;; 6) m_service start;; 7) m_service stop;; 8) m_service restart;;
-            4) systemctl status V2bX --no-pager;; 5) journalctl -u V2bX -n 100 --no-pager;;
+            4) systemctl status V2bX --no-pager;; 5) m_logs '返回菜单';;
             9) m_service enable;; 10) m_service disable;; 16) m_bbr;;
             14) m_need_install && "$M_BINARY/V2bX" version;; 15) m_need_install && "$M_BINARY/V2bX" x25519;;
             13) m_update_tools && exec bash "$M_SELF";;
@@ -144,7 +154,7 @@ m_main() {
         generate) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
         socks) m_socks;; update) m_need_install && m_install_core "${2:-}";;
         update_shell) m_update_tools;; start|stop|restart|enable|disable) m_service "$1";;
-        status) systemctl status V2bX --no-pager;; log) journalctl -u V2bX -e --no-pager -f;;
+        status) systemctl status V2bX --no-pager;; log) m_logs;;
         config) m_edit;; uninstall) m_uninstall;; x25519|version) m_need_install && "$M_BINARY/V2bX" "$1";;
     esac
 }
