@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.5.0
+MANAGER_VERSION=3.5.1
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -858,16 +858,41 @@ m_nodes_rollback() {
     [[ $ok == true ]] || return 1
     [[ $N_WAS_ACTIVE != true ]] || systemctl start V2bX || return 1
 }
+# sha256sum is already a required runtime tool; cmp is not present on some
+# minimal hosts. Return 0 for equal content, 1 for different content, 2 on error.
+m_node_files_equal() {
+    local before after
+    before=$(sha256sum < "$1") && after=$(sha256sum < "$2") || return 2
+    before=${before%% *}; after=${after%% *}
+    [[ $before =~ ^[a-f0-9]{64}$ && $after =~ ^[a-f0-9]{64}$ ]] || return 2
+    [[ $before == "$after" ]]
+}
+m_node_check_original() {
+    local code=0
+    if [[ -L $2 ]]; then code=1
+    else m_node_files_equal "$1" "$2" || code=$?; fi
+    case $code in
+        0) return 0;;
+        1) m_error '配置已被其他操作修改，未覆盖。';;
+        *) m_error '无法读取或校验配置文件，未覆盖。';;
+    esac
+    return 1
+}
 m_nodes_save() {
-    local i changed=false
+    local i code changed=false
     cp "$N_STAGE/config.json" "$N_STAGE/0.after" || return 1
     for ((i=0;i<${#N_PATHS[@]};i++)); do
         if [[ -f $N_STAGE/$i.absent ]]; then
             [[ ! -e ${N_PATHS[$i]} && ! -L ${N_PATHS[$i]} ]] || { m_error '配置文件已被其他操作创建，未覆盖。'; return 1; }
             changed=true
         else
-            [[ ! -L ${N_PATHS[$i]} ]] && cmp -s "$N_STAGE/$i.before" "${N_PATHS[$i]}" || { m_error '配置已被其他操作修改，未覆盖。'; return 1; }
-            cmp -s "$N_STAGE/$i.before" "$N_STAGE/$i.after" || changed=true
+            m_node_check_original "$N_STAGE/$i.before" "${N_PATHS[$i]}" || return 1
+            code=0; m_node_files_equal "$N_STAGE/$i.before" "$N_STAGE/$i.after" || code=$?
+            case $code in
+                0) ;;
+                1) changed=true;;
+                *) m_error '无法读取或校验待保存配置，未保存。'; return 1;;
+            esac
         fi
     done
     [[ $changed == true ]] || { printf '没有修改，未保存或重启。\n'; return 0; }
@@ -878,7 +903,7 @@ m_nodes_save() {
     # Recheck after the user prompt: other tools need not honour this lock.
     for ((i=0;i<${#N_PATHS[@]};i++)); do
         if [[ -f $N_STAGE/$i.absent ]]; then [[ ! -e ${N_PATHS[$i]} && ! -L ${N_PATHS[$i]} ]] || return 1
-        else [[ ! -L ${N_PATHS[$i]} ]] && cmp -s "$N_STAGE/$i.before" "${N_PATHS[$i]}" || return 1; fi
+        else m_node_check_original "$N_STAGE/$i.before" "${N_PATHS[$i]}" || return 1; fi
     done
     [[ ! -L $M_CONFIG/manager-backups ]] || return 1
     mkdir -p "$M_CONFIG/manager-backups" && chmod 700 "$M_CONFIG/manager-backups" || return 1

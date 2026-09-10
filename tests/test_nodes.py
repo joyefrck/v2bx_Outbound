@@ -76,6 +76,60 @@ m_health() { return 0; }
         self.assertEqual(self.config.read_bytes(), original)
         self.assertFalse((self.cfg/'calls').exists())
 
+    def test_modify_id_without_cmp_preserves_existing_socks(self):
+        code = self.setup_nodes()
+        routes = self.route.read_bytes(), self.out.read_bytes()
+        result = self.run_shell(code + '''
+cmp() { printf 'cmp: command not found\\n' >&2; return 127; }
+m_edit
+''', '1\n1\ny\n3\n3\n8\ny\n')
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after['Nodes'][0]['NodeID'], 3)
+        self.assertEqual(after['Nodes'][0]['Name'], self.tags[0])
+        self.assertEqual(after['Nodes'][1]['NodeID'], 2)
+        self.assertEqual(routes, (self.route.read_bytes(), self.out.read_bytes()))
+        self.assertNotIn('cmp:', result.stderr)
+        self.assertIn('节点操作已完成', result.stdout)
+
+    def test_hash_failure_is_not_reported_as_external_edit(self):
+        code = self.setup_nodes()
+        original = self.config.read_bytes()
+        result = self.run_shell(code + '''
+sha256sum() { return 1; }
+m_edit
+''', '1\n1\ny\n3\n3\n8\ny\n', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('无法读取或校验配置文件', result.stderr)
+        self.assertNotIn('已被其他操作修改', result.stderr)
+        self.assertEqual(original, self.config.read_bytes())
+        self.assertFalse((self.cfg/'calls').exists())
+
+    def test_candidate_hash_failure_never_saves(self):
+        code = self.setup_nodes()
+        original = self.config.read_bytes()
+        result = self.run_shell(code + '''
+m_node_files_equal() { [[ $2 != *.after ]] || return 2; return 0; }
+m_edit
+''', '1\n1\ny\n3\n3\n8\ny\n', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('无法读取或校验待保存配置', result.stderr)
+        self.assertEqual(original, self.config.read_bytes())
+        self.assertFalse((self.cfg/'calls').exists())
+
+    def test_file_comparison_distinguishes_difference_and_read_failure(self):
+        self.setup_nodes()
+        result = self.run_shell('''
+m_node_files_equal "$M_CONFIG/config.json" "$M_CONFIG/config.json" || exit 10
+code=0; m_node_files_equal "$M_CONFIG/config.json" "$M_CONFIG/route.json" || code=$?
+[[ $code == 1 ]] || exit 11
+code=0; m_node_files_equal "$M_CONFIG/config.json" "$M_CONFIG/missing.json" || code=$?
+[[ $code == 2 ]] || exit 12
+sha256sum() { printf 'invalid-hash\\n'; }
+code=0; m_node_files_equal "$M_CONFIG/config.json" "$M_CONFIG/config.json" || code=$?
+[[ $code == 2 ]] || exit 13
+''')
+        self.assertEqual(result.returncode, 0)
+
     def test_cancel_target_or_save_does_not_modify(self):
         code = self.setup_nodes()
         original = self.config.read_bytes()
