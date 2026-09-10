@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.5 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.6 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.5.1
+VERSION=2.6.0
 HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false
@@ -202,9 +202,38 @@ probe_socks() {
     ui_line '1;32' "SOCKS TCP / HTTPS 测试通过，当前出口 IP：${result}"
     say '请与你购买的出口信息核对；这不代表 UDP 或客户端完整链路已验证。'
 }
+parse_quick_endpoint() {
+    # Credentials arrive only on stdin. Everything after the username's colon
+    # belongs to the password; bracket IPv6 to distinguish it from delimiters.
+    jq -Rse '
+      capture("^(?<host>\\[[0-9a-fA-F:]+\\]|[^:\\[\\]]+):(?<port>[0-9]{1,5}):(?<username>[^:]+):(?<password>.+)$") |
+      .host |= (ltrimstr("[") | rtrimstr("]")) |
+      .port |= tonumber | .udp = false
+    ' 2>/dev/null
+}
 ask_endpoint() {
     local host port user password=''
     ui_section 'SOCKS5 连接信息'
+    ui_option 1 '快捷配置（默认）：粘贴 IP:端口:用户名:密码'
+    ui_option 2 '逐项输入：分别填写地址、端口和认证信息'
+    ask '请选择配置方式 [1-2]' 1 || return 1
+    case $REPLY in
+        1)
+            say '  格式：IP:端口:用户名:密码（IPv6 地址加方括号）'
+            say '  示例：192.0.2.10:1080:example-user:example-pass'
+            say '  用户名含冒号，或使用无认证 / IP 白名单时，请选逐项输入。'
+            ask '粘贴 SOCKS 连接信息（直接显示）' || return 1
+            if ! printf '%s' "$REPLY" | parse_quick_endpoint > "$TASK_DIR/endpoint.json"; then
+                REPLY=''
+                fail '格式不正确，请使用 IP:端口:用户名:密码，或选择逐项输入。'; return 1
+            fi
+            REPLY=''
+            validate_endpoint "$TASK_DIR/endpoint.json" || { fail '地址、端口或认证信息无效；端口应为 1—65535。'; return 1; }
+            probe_socks "$TASK_DIR/endpoint.json"
+            return $?;;
+        2) ;;
+        *) fail '请选择 1 或 2。'; return 1;;
+    esac
     say '  请分别填写地址、端口和认证信息。'
     ask 'SOCKS 地址（只填 IP 或域名）' || return 1; host=$REPLY
     host=${host#[}; host=${host%]}
