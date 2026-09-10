@@ -402,6 +402,7 @@ class TerminalTests(unittest.TestCase):
         code = 'source "$1"; exec 9<>/dev/tty; ask NODE 11; n=$REPLY; secret_read PASSWORD; [[ $REPLY == fixture-password ]] && printf "\\nRESULT:%s\\n" "$n"'
         pid, fd = pty.fork()
         if pid == 0:
+            os.environ['NO_COLOR'] = '1'
             os.execv('/bin/bash', ['bash', '-c', code, 'test', str(SCRIPT)])
         out = bytearray(); stage = 0
         try:
@@ -413,8 +414,10 @@ class TerminalTests(unittest.TestCase):
                 except OSError: break
                 if not data: break
                 out.extend(data)
-                if stage == 0 and b'NODE' in out: os.write(fd, b'\n'); stage=1
-                if stage == 1 and b'PASSWORD' in out: os.write(fd, b'fixture-password\n'); stage=2
+                # Wait for the entire prompt: its trailing colon is a separate
+                # write and can otherwise split the terminal's input echo.
+                if stage == 0 and 'NODE [11]：'.encode() in out: os.write(fd, b'\n'); stage=1
+                if stage == 1 and 'PASSWORD：'.encode() in out: os.write(fd, b'fixture-password\n'); stage=2
             self.assertIn(b'RESULT:11', out)
             self.assertIn(b'fixture-password', out)
         finally:
