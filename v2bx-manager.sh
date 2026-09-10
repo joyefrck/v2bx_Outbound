@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.5.1
+MANAGER_VERSION=3.5.2
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -64,26 +64,38 @@ m_apt_dependencies() (
        apt-get "${options[@]}" install -y --no-remove --no-install-recommends "${packages[@]}"; then
         return 0
     fi
-    if [[ $distro != debian || $version != 11 ]]; then
+    if [[ $distro != debian || ( $version != 11 && $version != 12 ) ]]; then
         m_error 'APT 依赖安装失败；请检查上方报错并修复软件源后重试。'; return 1
     fi
-    m_line 33 'Debian 11 依赖安装失败；改用临时官方软件源及安全更新快照。'
-    m_line 33 'Debian 11 已结束官方 LTS；使用 2026-08-31 安全更新快照，仍验证签名。'
-    m_line 37 '此操作不覆盖 /etc/apt 的软件源配置；不使用已撤下的 backports。'
+    m_line 33 "Debian ${version} 依赖安装失败；改用临时官方软件源。"
+    if [[ $version == 11 ]]; then
+        m_line 33 'Debian 11 已结束官方 LTS；使用 2026-08-31 安全更新快照，仍验证签名。'
+    else
+        m_line 37 '使用 bookworm 官方主源、更新源和安全源；继续验证签名及索引有效期。'
+    fi
+    m_line 37 '此操作不覆盖 /etc/apt 的软件源配置；临时源不加载 backports 或第三方源。'
     stage=$(mktemp -d "${TMPDIR:-/tmp}/v2bx-apt.XXXXXX") || return 1
     trap 'rm -rf -- "$stage"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM HUP
     chmod 755 "$stage" || return 1
     mkdir -p "$stage/lists/partial" || return 1
-    # Bullseye LTS ended 2026-08-31; its last security index expired 2026-09-07.
-    # Pin both the security index and its package pool. The live CDN can return
-    # 404 for APT's percent-encoded package URLs even while its index still exists.
-    # The validity exception applies only to this snapshot, never to all APT sources.
-    cat > "$stage/sources.list" <<'SOURCES'
+    if [[ $version == 11 ]]; then
+        # Bullseye LTS ended 2026-08-31; pin its security index and package pool.
+        # The validity exception applies only to this retired snapshot.
+        cat > "$stage/sources.list" <<'SOURCES'
 deb https://deb.debian.org/debian bullseye main
 deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260831T235959Z/ bullseye-security main
 SOURCES
+    else
+        # Bookworm is still maintained. Never disable its freshness checks to
+        # work around a stale mirror; use current official indexes instead.
+        cat > "$stage/sources.list" <<'SOURCES'
+deb https://deb.debian.org/debian bookworm main
+deb https://deb.debian.org/debian bookworm-updates main
+deb https://deb.debian.org/debian-security bookworm-security main
+SOURCES
+    fi
     chmod 644 "$stage/sources.list" || return 1
     options+=(-o "Dir::Etc::sourcelist=$stage/sources.list" -o Dir::Etc::sourceparts=-
         -o "Dir::State::lists=$stage/lists")

@@ -34,6 +34,8 @@ curl -fL --connect-timeout 15 --max-time 90 --retry 5 --retry-delay 3 -o install
 如果 Debian 11 安装依赖时出现 `bullseye-backports` 404、安全索引过期或软件包 404，管理工具会在原有 APT 更新或安装失败后，改用临时官方源和 **2026-08-31 的 Debian 官方安全更新快照**。快照同时提供对应索引和软件包，避免索引可读、实际下载地址却返回 404。它不覆盖 `/etc/apt` 下的配置，不使用 backports；只对固定安全快照设置 `check-valid-until=no`，签名及软件包校验继续生效。临时源和索引用完清理，系统原有软件源仍需单独维护。CI 使用原生 AMD64 Debian 11 容器实际安装依赖并运行 jq。
 Debian 11 官方 LTS 已于 2026-08-31 结束；此兼容处理不代表恢复安全更新，长期使用应安排升级系统。
 
+Debian 12 的镜像源若返回过期索引，或依赖安装失败，管理工具 3.5.2 起会使用临时的 Debian 官方 `bookworm`、`bookworm-updates`、`bookworm-security` 源重试。此流程不加载 backports 和第三方源，不覆盖 `/etc/apt` 配置，并保留签名及索引有效期校验；不会套用 Debian 11 的历史快照或关闭有效期检查。若官方源也提示索引时间异常，请核对系统时间。CI 在原生 AMD64 Debian 12 容器中复现过期源后实际安装依赖。
+
 CentOS 7.9 的 systemd 不提供 `NRestarts`，显式查询这个属性会导致服务读取失败。管理工具 3.4.3 / SOCKS 助手 2.5.1 起读取实际可用的属性，继续校验 `active/running`、主进程 PID、进程启动时间及监听端口；新系统同时保留重启计数检查。真实 systemd 查询错误会显示原始报错，配置失败仍执行回滚。
 
 旧版本修改节点时若出现 `cmp: command not found`，随后提示“配置已被其他操作修改”，是精简系统缺少比较工具造成的误报。管理工具 3.5.1 起使用已有依赖 `sha256sum` 比较文件，保留确认前后的防覆盖检查，并区分文件读取失败与内容变化。更新管理工具后重新修改即可。

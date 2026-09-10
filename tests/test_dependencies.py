@@ -62,10 +62,29 @@ m_apt_dependencies "$2" "$3"
         self.assertIn('APT:install:isolated', result.stdout)
 
     def test_other_systems_do_not_use_bullseye_sources(self):
-        for distro, version in (('debian', '12'), ('ubuntu', '22.04')):
+        for distro, version in (('debian', '13'), ('ubuntu', '22.04')):
             result = self.run_apt(distro, version)
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn('isolated', result.stdout)
+
+    def test_bookworm_recovers_with_current_sources_and_expiry_checks(self):
+        for mode in ('recover', 'install-404'):
+            result = self.run_apt(version='12', mode=mode)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('APT:install:isolated', result.stdout)
+            self.assertIn('https://deb.debian.org/debian bookworm main', result.stdout)
+            self.assertIn('https://deb.debian.org/debian bookworm-updates main', result.stdout)
+            self.assertIn('https://deb.debian.org/debian-security bookworm-security main', result.stdout)
+            for unwanted in ('check-valid-until=no', 'snapshot.debian.org', 'trusted=yes', 'bullseye', 'backports main'):
+                self.assertNotIn(unwanted, result.stdout)
+
+    def test_bookworm_official_source_failure_still_stops_installation(self):
+        for mode in ('fail-update', 'fail-install'):
+            result = self.run_apt(version='12', mode=mode)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('APT:update:isolated', result.stdout)
+            if mode == 'fail-update':
+                self.assertNotIn('APT:install:isolated', result.stdout)
 
     def test_recovery_failures_propagate_and_clean_up(self):
         for mode in ('fail-update', 'fail-install'):
