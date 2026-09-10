@@ -34,6 +34,8 @@ curl -fL --connect-timeout 15 --max-time 90 --retry 5 --retry-delay 3 -o install
 如果 Debian 11 安装依赖时出现 `bullseye-backports` 404、安全索引过期或软件包 404，管理工具会在原有 APT 更新或安装失败后，改用临时官方源和 **2026-08-31 的 Debian 官方安全更新快照**。快照同时提供对应索引和软件包，避免索引可读、实际下载地址却返回 404。它不覆盖 `/etc/apt` 下的配置，不使用 backports；只对固定安全快照设置 `check-valid-until=no`，签名及软件包校验继续生效。临时源和索引用完清理，系统原有软件源仍需单独维护。CI 使用原生 AMD64 Debian 11 容器实际安装依赖并运行 jq。
 Debian 11 官方 LTS 已于 2026-08-31 结束；此兼容处理不代表恢复安全更新，长期使用应安排升级系统。
 
+CentOS 7.9 的 systemd 不提供 `NRestarts`，显式查询这个属性会导致服务读取失败。管理工具 3.4.3 / SOCKS 助手 2.5.1 起读取实际可用的属性，继续校验 `active/running`、主进程 PID、进程启动时间及监听端口；新系统同时保留重启计数检查。真实 systemd 查询错误会显示原始报错，配置失败仍执行回滚。
+
 首次安装后按提示填写面板地址、API Key、内核、节点 ID 和协议。API Key、DNS 密钥和 SOCKS 密码输入时直接显示，便于核对；支持多个节点共用面板。
 可以暂时跳过节点配置，之后运行 `v2bx generate`。服务启动并稳定监听后，询问是否配置 SOCKS：**默认回车跳过**。
 跳过 SOCKS 不影响普通 V2bX 使用；之后随时运行 `v2bx socks`。

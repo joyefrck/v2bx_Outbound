@@ -2,7 +2,7 @@
 # V2bX SOCKS Helper 2.5 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.5.0
+VERSION=2.5.1
 HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false
@@ -91,7 +91,11 @@ atomic_copy() {
 }
 
 service_state() {
-    systemctl show V2bX.service --property=LoadState,ActiveState,SubState,MainPID,NRestarts,ExecStart,WorkingDirectory 2>/dev/null
+    # RHEL/CentOS 7 returns ENXIO when a requested property (e.g. NRestarts)
+    # does not exist. Read available properties, then keep only our fields.
+    # pipefail preserves real systemctl failures; leave diagnostics visible.
+    systemctl show V2bX.service |
+        awk '/^(LoadState|ActiveState|SubState|MainPID|NRestarts|ExecMainStartTimestampMonotonic|ExecStart|WorkingDirectory)=/'
 }
 property() { sed -n "s/^$1=//p"; }
 discover() {
@@ -139,7 +143,7 @@ healthy() {
         }
         pid=$(printf '%s\n' "$state" | property MainPID)
         [[ $pid =~ ^[1-9][0-9]*$ ]] || { HEALTH_ERROR='服务没有有效的主进程 PID。'; return 1; }
-        current="$pid:$(printf '%s\n' "$state" | property NRestarts)"
+        current="$pid:$(printf '%s\n' "$state" | property NRestarts):$(printf '%s\n' "$state" | property ExecMainStartTimestampMonotonic)"
         [[ -z $identity || $identity == "$current" ]] || { HEALTH_ERROR='观察期间服务发生重启或主进程变化。'; return 1; }
         identity=$current
         # Read ss completely before matching: grep -q in a pipe may close early,
