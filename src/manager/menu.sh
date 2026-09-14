@@ -1,18 +1,34 @@
 # CLI compatibility adapted from upstream V2bX.sh (MPL-2.0); menu numbers follow display order.
 m_update_tools() (
-    stage=''; commit=''; base=''; file=''; expected=''
+    stage=''; commit=''; base=''; file=''; expected=''; updated_version=''
     umask 077
     stage=$(mktemp -d /tmp/v2bx-tools.XXXXXX) || exit 1
     trap 'rm -rf "$stage"' EXIT
-    m_fetch 'https://api.github.com/repos/joyefrck/v2bx_Outbound/git/ref/heads/main' "$stage/head.json" || exit 1
-    commit=$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' "$stage/head.json") || exit 1
+    m_section '更新管理工具'
+    m_line 37 "  当前管理工具版本：${MANAGER_VERSION}；正在检查最新版本。"
+    m_fetch 'https://api.github.com/repos/joyefrck/v2bx_Outbound/git/ref/heads/main' "$stage/head.json" || {
+        m_error '无法检查管理工具更新，请检查 GitHub 连接后重试。'; exit 1;
+    }
+    commit=$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' "$stage/head.json") || {
+        m_error '无法读取最新管理工具提交，未更新。'; exit 1;
+    }
     base="https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/$commit"
-    for file in install.sh SHA256SUMS; do m_fetch "$base/$file" "$stage/$file" || exit 1; done
+    for file in install.sh SHA256SUMS; do
+        m_fetch "$base/$file" "$stage/$file" || { m_error '管理工具更新文件下载失败，请重试。'; exit 1; }
+    done
     expected=$(awk '$2=="install.sh" && NF==2 {print $1}' "$stage/SHA256SUMS")
-    [[ $expected =~ ^[0-9a-f]{64}$ && $(sha256sum "$stage/install.sh" | cut -d ' ' -f 1) == "$expected" ]] || exit 1
-    bash -n "$stage/install.sh" || exit 1
-    m_confirm '更新本仓库管理工具与 SOCKS 助手（不更新内核、不重启节点）？' || exit 0
-    bash "$stage/install.sh" --tools-only --commit "$commit"
+    [[ $expected =~ ^[0-9a-f]{64}$ && $(sha256sum "$stage/install.sh" | cut -d ' ' -f 1) == "$expected" ]] || {
+        m_error '管理工具更新文件校验失败，未执行更新。'; exit 1;
+    }
+    bash -n "$stage/install.sh" || { m_error '管理工具安装脚本语法检查失败，未执行更新。'; exit 1; }
+    m_confirm '更新到最新管理工具与 SOCKS 助手（不更新内核、不重启节点）？' || exit 2
+    bash "$stage/install.sh" --tools-only --commit "$commit" || {
+        m_error '管理工具更新失败，请检查上方安装日志后重试。'; exit 1;
+    }
+    updated_version=$(bash "$M_SELF" --version) && [[ $updated_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+        m_error '安装流程已结束，但无法确认管理工具版本，请重新运行 v2bx 检查。'; exit 1;
+    }
+    m_line 32 "  ✓ 管理工具已更新：${MANAGER_VERSION} → ${updated_version}"
 )
 m_uninstall() (
     m_need_install && m_lock || exit 1
@@ -106,8 +122,8 @@ m_menu() {
         m_option 10 '取消开机自启'
         m_section '⚙ 安装与维护'
         m_option 11 '安装 V2bX'
-        m_option 12 '更新 V2bX 内核'
-        m_option 13 '更新管理工具（含 SOCKS 助手）'
+        m_option 12 '更新管理工具到最新版（含 SOCKS 助手）'
+        m_option 13 '单独更新 V2bX 内核'
         m_option 14 '查看 V2bX 版本'
         m_option 15 '生成 X25519 密钥'
         m_option 16 '安装 BBR'
@@ -117,12 +133,12 @@ m_menu() {
         m_ask '请选择 [1-19]' || return 0; choice=$M_REPLY
         case $choice in
             1) m_edit;; 11) m_install_flow;;
-            12) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
+            13) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
             18) m_uninstall;; 6) m_service start;; 7) m_service stop;; 8) m_service restart;;
             4) systemctl status V2bX --no-pager;; 5) m_logs '返回菜单';;
             9) m_service enable;; 10) m_service disable;; 16) m_bbr;;
             14) m_need_install && "$M_BINARY/V2bX" version;; 15) m_need_install && "$M_BINARY/V2bX" x25519;;
-            13) m_update_tools && exec bash "$M_SELF";;
+            12) m_update_tools && exec bash "$M_SELF";;
             2) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
             17) m_open_ports;; 19) return 0;; 3) m_socks;; *) m_line 33 '请输入 1-19。';;
         esac

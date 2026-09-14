@@ -9,15 +9,21 @@ m_panel() {
     api_key=$M_REPLY; M_REPLY=''
 }
 m_node() {
-    local core node_id protocol reality=n tls=n certmode=none domain=example.com fast=true listen=0.0.0.0 certfile keyfile provider='' dnsenv='{}'
+    local core node_ids protocol reality=n tls=n certmode=none domain=example.com fast=true listen=0.0.0.0 certfile keyfile provider='' dnsenv='{}'
     if [[ -n ${M_NODE_CORE:-} ]]; then core=$M_NODE_CORE
     else
         m_choose '节点核心' '请选择节点核心 [1-3]' 'Xray' 'sing-box' '独立 Hysteria2' || return 1
         case $M_REPLY in 1) core=xray;; 2) core=sing;; 3) core=hysteria2;; *) m_error '请选择 1、2 或 3。'; return 1;; esac
     fi
-    m_ask '请输入节点 Node ID（正整数）' || return 1
-    [[ $M_REPLY =~ ^[1-9][0-9]{0,9}$ ]] || { m_error 'Node ID 必须为正整数。'; return 1; }
-    node_id=$M_REPLY
+    m_line 37 '  单个节点填一个 ID；批量填写如 101,102,103（也支持空格、中文逗号）。'
+    m_line 37 '  同组节点共用面板、内核、协议和证书配置，只有 ID 不同。'
+    m_ask '请输入节点 Node ID（一个或多个正整数）' || return 1
+    node_ids=$(printf '%s' "$M_REPLY" | jq -Rsc '
+      gsub("，"; ",") |
+      if test("^[ \\t]*[1-9][0-9]{0,9}([ \\t]*,[ \\t]*[1-9][0-9]{0,9}|[ \\t]+[1-9][0-9]{0,9})*[ \\t]*$")
+      then [scan("[0-9]+") | tonumber] else error("invalid node IDs") end |
+      if length == (unique | length) then . else error("duplicate node IDs") end
+    ' 2>/dev/null) || { m_error 'Node ID 须为 1 至 10 位正整数，用逗号或空格分隔；不能重复、留空项或填写范围。'; return 1; }
     if [[ $core == hysteria2 ]]; then protocol=hysteria2
     else
         m_protocol_options '请选择协议 [1-8]' || return 1
@@ -48,23 +54,24 @@ m_node() {
     fi
     [[ $core != sing || $(check_ipv6_support) != 1 ]] || listen=::
     # All strings, including secrets, enter jq through stdin, never process arguments.
-    printf '%s\n' "$core" "$api_host" "$api_key" "$node_id" "$protocol" "$certmode" "$domain" "$listen" "$fast" "$certfile" "$keyfile" "$provider" "$dnsenv" "$M_CONFIG" |
-        jq -Rs 'split("\n") as $v |
-        {Core:$v[0],ApiHost:$v[1],ApiKey:$v[2],NodeID:($v[3]|tonumber),NodeType:$v[4],Timeout:30,
+    printf '%s\n' "$core" "$api_host" "$api_key" "$node_ids" "$protocol" "$certmode" "$domain" "$listen" "$fast" "$certfile" "$keyfile" "$provider" "$dnsenv" "$M_CONFIG" |
+        jq -Rsc 'split("\n") as $v |
+        {Core:$v[0],ApiHost:$v[1],ApiKey:$v[2],NodeType:$v[4],Timeout:30,
          ListenIP:$v[7],SendIP:"0.0.0.0",DeviceOnlineMinTraffic:200,MinReportTraffic:0,
          CertConfig:{CertMode:$v[5],RejectUnknownSni:false,CertDomain:$v[6],CertFile:$v[9],KeyFile:$v[10],
             Email:"v2bx@github.com",Provider:$v[11],DNSEnv:($v[12]|fromjson)}} |
         if .Core=="xray" then .+{EnableProxyProtocol:false,EnableUot:true,EnableTFO:true,DNSType:"UseIPv4"}
         elif .Core=="sing" then .+{TCPFastOpen:($v[8]=="true"),SniffEnabled:true}
-        else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end' >> "$candidate/nodes.jsonl" || return 1
-    m_line 32 "  ✓ 节点已填写 · ID ${node_id} · ${core} / ${protocol}"
+        else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end |
+        ($v[3]|fromjson)[] as $id | .NodeID=$id' >> "$candidate/nodes.jsonl" || return 1
+    m_line 32 "  ✓ 节点已填写 · ID ${node_ids} · ${core} / ${protocol}"
 }
 m_collect_nodes() {
     local candidate=$1 api_host='' api_key='' fixed=n node_number=1
     m_panel || return 1
     m_ask '后续节点是否共用面板地址与 API Key？[y/N]' || return 1; fixed=$M_REPLY
     while true; do
-        m_section "第 ${node_number} 个节点"
+        m_section "第 ${node_number} 组节点（可填单个或多个 ID）"
         m_node || return 1
         m_ask '是否继续添加节点？[y/N]' || return 1
         [[ $M_REPLY == [yY] ]] || break
@@ -72,6 +79,10 @@ m_collect_nodes() {
         [[ $fixed == [yY] ]] || m_panel || return 1
     done
     api_key=''; M_REPLY=''
+    jq -se '[.[] | [.ApiHost, (.NodeType|ascii_downcase), .NodeID]] |
+      length == (unique|length)' "$candidate/nodes.jsonl" >/dev/null || {
+        m_error '同一面板、协议下的节点 ID 重复；未保存。'; return 1;
+    }
 }
 m_core_filter() {
     cat <<'JQ'

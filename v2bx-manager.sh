@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.5.2
+MANAGER_VERSION=3.6.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -38,7 +38,7 @@ m_banner() {
     m_line '1;36' '  +--------------------------------------+'
     m_line '1;36' '  |   >_  V2bX  /  NETWORK CONTROL       |'
     m_line '1;36' '  +--------------------------------------+'
-    m_line 37 "  节点连接世界 · 出口由你掌控    v${MANAGER_VERSION}"
+    m_line 37 "  节点连接世界 · 出口由你掌控    管理工具 v${MANAGER_VERSION}"
 }
 m_error() { m_line '1;31' "未完成：$*" >&2; return 1; }
 m_ask() { m_paint '1;36' '  › ' >&9; m_paint '1;37' "$1：" >&9; IFS= read -r M_REPLY <&9; }
@@ -373,15 +373,21 @@ m_panel() {
     api_key=$M_REPLY; M_REPLY=''
 }
 m_node() {
-    local core node_id protocol reality=n tls=n certmode=none domain=example.com fast=true listen=0.0.0.0 certfile keyfile provider='' dnsenv='{}'
+    local core node_ids protocol reality=n tls=n certmode=none domain=example.com fast=true listen=0.0.0.0 certfile keyfile provider='' dnsenv='{}'
     if [[ -n ${M_NODE_CORE:-} ]]; then core=$M_NODE_CORE
     else
         m_choose '节点核心' '请选择节点核心 [1-3]' 'Xray' 'sing-box' '独立 Hysteria2' || return 1
         case $M_REPLY in 1) core=xray;; 2) core=sing;; 3) core=hysteria2;; *) m_error '请选择 1、2 或 3。'; return 1;; esac
     fi
-    m_ask '请输入节点 Node ID（正整数）' || return 1
-    [[ $M_REPLY =~ ^[1-9][0-9]{0,9}$ ]] || { m_error 'Node ID 必须为正整数。'; return 1; }
-    node_id=$M_REPLY
+    m_line 37 '  单个节点填一个 ID；批量填写如 101,102,103（也支持空格、中文逗号）。'
+    m_line 37 '  同组节点共用面板、内核、协议和证书配置，只有 ID 不同。'
+    m_ask '请输入节点 Node ID（一个或多个正整数）' || return 1
+    node_ids=$(printf '%s' "$M_REPLY" | jq -Rsc '
+      gsub("，"; ",") |
+      if test("^[ \\t]*[1-9][0-9]{0,9}([ \\t]*,[ \\t]*[1-9][0-9]{0,9}|[ \\t]+[1-9][0-9]{0,9})*[ \\t]*$")
+      then [scan("[0-9]+") | tonumber] else error("invalid node IDs") end |
+      if length == (unique | length) then . else error("duplicate node IDs") end
+    ' 2>/dev/null) || { m_error 'Node ID 须为 1 至 10 位正整数，用逗号或空格分隔；不能重复、留空项或填写范围。'; return 1; }
     if [[ $core == hysteria2 ]]; then protocol=hysteria2
     else
         m_protocol_options '请选择协议 [1-8]' || return 1
@@ -412,23 +418,24 @@ m_node() {
     fi
     [[ $core != sing || $(check_ipv6_support) != 1 ]] || listen=::
     # All strings, including secrets, enter jq through stdin, never process arguments.
-    printf '%s\n' "$core" "$api_host" "$api_key" "$node_id" "$protocol" "$certmode" "$domain" "$listen" "$fast" "$certfile" "$keyfile" "$provider" "$dnsenv" "$M_CONFIG" |
-        jq -Rs 'split("\n") as $v |
-        {Core:$v[0],ApiHost:$v[1],ApiKey:$v[2],NodeID:($v[3]|tonumber),NodeType:$v[4],Timeout:30,
+    printf '%s\n' "$core" "$api_host" "$api_key" "$node_ids" "$protocol" "$certmode" "$domain" "$listen" "$fast" "$certfile" "$keyfile" "$provider" "$dnsenv" "$M_CONFIG" |
+        jq -Rsc 'split("\n") as $v |
+        {Core:$v[0],ApiHost:$v[1],ApiKey:$v[2],NodeType:$v[4],Timeout:30,
          ListenIP:$v[7],SendIP:"0.0.0.0",DeviceOnlineMinTraffic:200,MinReportTraffic:0,
          CertConfig:{CertMode:$v[5],RejectUnknownSni:false,CertDomain:$v[6],CertFile:$v[9],KeyFile:$v[10],
             Email:"v2bx@github.com",Provider:$v[11],DNSEnv:($v[12]|fromjson)}} |
         if .Core=="xray" then .+{EnableProxyProtocol:false,EnableUot:true,EnableTFO:true,DNSType:"UseIPv4"}
         elif .Core=="sing" then .+{TCPFastOpen:($v[8]=="true"),SniffEnabled:true}
-        else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end' >> "$candidate/nodes.jsonl" || return 1
-    m_line 32 "  ✓ 节点已填写 · ID ${node_id} · ${core} / ${protocol}"
+        else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end |
+        ($v[3]|fromjson)[] as $id | .NodeID=$id' >> "$candidate/nodes.jsonl" || return 1
+    m_line 32 "  ✓ 节点已填写 · ID ${node_ids} · ${core} / ${protocol}"
 }
 m_collect_nodes() {
     local candidate=$1 api_host='' api_key='' fixed=n node_number=1
     m_panel || return 1
     m_ask '后续节点是否共用面板地址与 API Key？[y/N]' || return 1; fixed=$M_REPLY
     while true; do
-        m_section "第 ${node_number} 个节点"
+        m_section "第 ${node_number} 组节点（可填单个或多个 ID）"
         m_node || return 1
         m_ask '是否继续添加节点？[y/N]' || return 1
         [[ $M_REPLY == [yY] ]] || break
@@ -436,6 +443,10 @@ m_collect_nodes() {
         [[ $fixed == [yY] ]] || m_panel || return 1
     done
     api_key=''; M_REPLY=''
+    jq -se '[.[] | [.ApiHost, (.NodeType|ascii_downcase), .NodeID]] |
+      length == (unique|length)' "$candidate/nodes.jsonl" >/dev/null || {
+        m_error '同一面板、协议下的节点 ID 重复；未保存。'; return 1;
+    }
 }
 m_core_filter() {
     cat <<'JQ'
@@ -985,19 +996,35 @@ m_edit() (
 )
 # CLI compatibility adapted from upstream V2bX.sh (MPL-2.0); menu numbers follow display order.
 m_update_tools() (
-    stage=''; commit=''; base=''; file=''; expected=''
+    stage=''; commit=''; base=''; file=''; expected=''; updated_version=''
     umask 077
     stage=$(mktemp -d /tmp/v2bx-tools.XXXXXX) || exit 1
     trap 'rm -rf "$stage"' EXIT
-    m_fetch 'https://api.github.com/repos/joyefrck/v2bx_Outbound/git/ref/heads/main' "$stage/head.json" || exit 1
-    commit=$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' "$stage/head.json") || exit 1
+    m_section '更新管理工具'
+    m_line 37 "  当前管理工具版本：${MANAGER_VERSION}；正在检查最新版本。"
+    m_fetch 'https://api.github.com/repos/joyefrck/v2bx_Outbound/git/ref/heads/main' "$stage/head.json" || {
+        m_error '无法检查管理工具更新，请检查 GitHub 连接后重试。'; exit 1;
+    }
+    commit=$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' "$stage/head.json") || {
+        m_error '无法读取最新管理工具提交，未更新。'; exit 1;
+    }
     base="https://raw.githubusercontent.com/joyefrck/v2bx_Outbound/$commit"
-    for file in install.sh SHA256SUMS; do m_fetch "$base/$file" "$stage/$file" || exit 1; done
+    for file in install.sh SHA256SUMS; do
+        m_fetch "$base/$file" "$stage/$file" || { m_error '管理工具更新文件下载失败，请重试。'; exit 1; }
+    done
     expected=$(awk '$2=="install.sh" && NF==2 {print $1}' "$stage/SHA256SUMS")
-    [[ $expected =~ ^[0-9a-f]{64}$ && $(sha256sum "$stage/install.sh" | cut -d ' ' -f 1) == "$expected" ]] || exit 1
-    bash -n "$stage/install.sh" || exit 1
-    m_confirm '更新本仓库管理工具与 SOCKS 助手（不更新内核、不重启节点）？' || exit 0
-    bash "$stage/install.sh" --tools-only --commit "$commit"
+    [[ $expected =~ ^[0-9a-f]{64}$ && $(sha256sum "$stage/install.sh" | cut -d ' ' -f 1) == "$expected" ]] || {
+        m_error '管理工具更新文件校验失败，未执行更新。'; exit 1;
+    }
+    bash -n "$stage/install.sh" || { m_error '管理工具安装脚本语法检查失败，未执行更新。'; exit 1; }
+    m_confirm '更新到最新管理工具与 SOCKS 助手（不更新内核、不重启节点）？' || exit 2
+    bash "$stage/install.sh" --tools-only --commit "$commit" || {
+        m_error '管理工具更新失败，请检查上方安装日志后重试。'; exit 1;
+    }
+    updated_version=$(bash "$M_SELF" --version) && [[ $updated_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+        m_error '安装流程已结束，但无法确认管理工具版本，请重新运行 v2bx 检查。'; exit 1;
+    }
+    m_line 32 "  ✓ 管理工具已更新：${MANAGER_VERSION} → ${updated_version}"
 )
 m_uninstall() (
     m_need_install && m_lock || exit 1
@@ -1091,8 +1118,8 @@ m_menu() {
         m_option 10 '取消开机自启'
         m_section '⚙ 安装与维护'
         m_option 11 '安装 V2bX'
-        m_option 12 '更新 V2bX 内核'
-        m_option 13 '更新管理工具（含 SOCKS 助手）'
+        m_option 12 '更新管理工具到最新版（含 SOCKS 助手）'
+        m_option 13 '单独更新 V2bX 内核'
         m_option 14 '查看 V2bX 版本'
         m_option 15 '生成 X25519 密钥'
         m_option 16 '安装 BBR'
@@ -1102,12 +1129,12 @@ m_menu() {
         m_ask '请选择 [1-19]' || return 0; choice=$M_REPLY
         case $choice in
             1) m_edit;; 11) m_install_flow;;
-            12) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
+            13) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
             18) m_uninstall;; 6) m_service start;; 7) m_service stop;; 8) m_service restart;;
             4) systemctl status V2bX --no-pager;; 5) m_logs '返回菜单';;
             9) m_service enable;; 10) m_service disable;; 16) m_bbr;;
             14) m_need_install && "$M_BINARY/V2bX" version;; 15) m_need_install && "$M_BINARY/V2bX" x25519;;
-            13) m_update_tools && exec bash "$M_SELF";;
+            12) m_update_tools && exec bash "$M_SELF";;
             2) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
             17) m_open_ports;; 19) return 0;; 3) m_socks;; *) m_line 33 '请输入 1-19。';;
         esac

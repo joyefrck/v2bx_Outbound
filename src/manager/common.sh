@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.5.2
+MANAGER_VERSION=3.6.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -38,7 +38,7 @@ m_banner() {
     m_line '1;36' '  +--------------------------------------+'
     m_line '1;36' '  |   >_  V2bX  /  NETWORK CONTROL       |'
     m_line '1;36' '  +--------------------------------------+'
-    m_line 37 "  节点连接世界 · 出口由你掌控    v${MANAGER_VERSION}"
+    m_line 37 "  节点连接世界 · 出口由你掌控    管理工具 v${MANAGER_VERSION}"
 }
 m_error() { m_line '1;31' "未完成：$*" >&2; return 1; }
 m_ask() { m_paint '1;36' '  › ' >&9; m_paint '1;37' "$1：" >&9; IFS= read -r M_REPLY <&9; }

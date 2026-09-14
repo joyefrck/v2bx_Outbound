@@ -93,8 +93,8 @@ m_menu
         actions = {
             1: ['edit'], 2: ['generate', 'offer-socks'], 3: ['socks'],
             4: ['status'], 5: ['log'], 6: ['start'], 7: ['stop'], 8: ['restart'],
-            9: ['enable'], 10: ['disable'], 11: ['install'], 12: ['core:fixture-version'],
-            13: ['tools'], 14: ['binary:version'], 15: ['binary:x25519'],
+            9: ['enable'], 10: ['disable'], 11: ['install'], 12: ['tools'],
+            13: ['core:fixture-version'], 14: ['binary:version'], 15: ['binary:x25519'],
             16: ['bbr'], 17: ['ports'], 18: ['uninstall'], 19: [], 0: [],
         }
         body = '''
@@ -117,7 +117,7 @@ m_menu
 '''
         for number, expected in actions.items():
             with self.subTest(number=number):
-                inputs = str(number) + '\n' + ('fixture-version\n' if number == 12 else '') + '19\n'
+                inputs = str(number) + '\n' + ('fixture-version\n' if number == 13 else '') + '19\n'
                 result = self.run_shell(body, inputs)
                 actual = [line.removeprefix('ACTION:') for line in result.stdout.splitlines()
                           if line.startswith('ACTION:')]
@@ -210,6 +210,64 @@ m_build_config "$M_CONFIG/candidate"
                            'https://panel.invalid\nfixture-key\ny\n1\n1\n8\n', check=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse((self.cfg / 'candidate/config.json').exists())
+
+    def test_multiple_ids_share_one_configuration_and_keep_input_order(self):
+        key = 'fixture-"batch\\key'
+        for ids in ['33,11,22', '33 11 22', ' 33，11, 22 ', '33\t11 22']:
+            with self.subTest(ids=ids):
+                r = self.run_shell('mkdir -p "$M_CONFIG/candidate"; m_build_config "$M_CONFIG/candidate"',
+                                   '\n'.join(['https://panel.invalid', key, 'y', '1', ids, '2', 'y', 'n'])+'\n')
+                data = json.loads((self.cfg/'candidate/config.json').read_text())
+                self.assertEqual([n['NodeID'] for n in data['Nodes']], [33, 11, 22])
+                shared = [{k: v for k, v in n.items() if k != 'NodeID'} for n in data['Nodes']]
+                self.assertEqual(shared, [shared[0]]*3)
+                self.assertEqual(shared[0]['ApiKey'], key)
+                self.assertEqual(shared[0]['CertConfig']['CertMode'], 'none')
+                self.assertEqual(len(data['Cores']), 1)
+                self.assertEqual(r.stderr.count('请选择节点核心'), 1)
+                self.assertEqual(r.stderr.count('请选择协议'), 1)
+                self.assertNotIn(key, r.stdout+r.stderr)
+
+    def test_batch_certificate_reuse_and_next_group_resets_settings(self):
+        secret = 'fixture-"dns\\token'
+        self.run_shell('mkdir "$M_CONFIG/candidate"; check_ipv6_support() { printf 0; }; m_build_config "$M_CONFIG/candidate"',
+                       '\n'.join(['https://panel.invalid', 'fixture-key', 'y',
+                                  '2', '41,42', '8', '2', 'node.invalid', 'cloudflare',
+                                  json.dumps({'CF_DNS_API_TOKEN': secret}), 'y',
+                                  '1', '43', '1', 'n', 'n'])+'\n')
+        nodes = json.loads((self.cfg/'candidate/config.json').read_text())['Nodes']
+        self.assertEqual([n['NodeID'] for n in nodes], [41, 42, 43])
+        self.assertEqual(nodes[0]['CertConfig'], nodes[1]['CertConfig'])
+        self.assertEqual(nodes[0]['CertConfig']['DNSEnv'], {'CF_DNS_API_TOKEN': secret})
+        self.assertFalse(nodes[0]['TCPFastOpen'])
+        self.assertEqual(nodes[2]['CertConfig']['CertMode'], 'none')
+        self.assertEqual(nodes[2]['CertConfig']['DNSEnv'], {})
+
+    def test_standalone_hysteria2_accepts_multiple_ids(self):
+        self.run_shell('mkdir "$M_CONFIG/candidate"; m_build_config "$M_CONFIG/candidate"',
+                       'https://panel.invalid\nfixture-key\ny\n3\n51,52\n4\nnode.invalid\nn\n')
+        data = json.loads((self.cfg/'candidate/config.json').read_text())
+        self.assertEqual([n['NodeID'] for n in data['Nodes']], [51, 52])
+        self.assertTrue(all(n['Core']=='hysteria2' and n['NodeType']=='hysteria2' for n in data['Nodes']))
+        self.assertEqual(data['Nodes'][0]['CertConfig'], data['Nodes'][1]['CertConfig'])
+
+    def test_invalid_or_repeated_id_list_never_generates_configuration(self):
+        for ids in ['', ' ', '0,2', '-1,2', '01,2', '1,10000000000', '1,2.5', '1,abc',
+                    '1-3', '1,,2', ',1', '1,', '1;2', '1,1', '1，1']:
+            with self.subTest(ids=ids):
+                r = self.run_shell('mkdir -p "$M_CONFIG/candidate"; m_build_config "$M_CONFIG/candidate"',
+                                   'https://panel.invalid\nfixture-key\ny\n1\n'+ids+'\n1\nn\nn\n', check=False)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn('Node ID', r.stderr)
+                self.assertFalse((self.cfg/'candidate/config.json').exists())
+                self.assertFalse((self.cfg/'candidate/nodes.jsonl').exists())
+
+    def test_overlapping_groups_never_generate_configuration(self):
+        r = self.run_shell('mkdir "$M_CONFIG/candidate"; m_build_config "$M_CONFIG/candidate"',
+                           'https://panel.invalid\nfixture-key\ny\n1\n61,62\n1\nn\ny\n1\n62,63\n1\nn\nn\n', check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('重复', r.stderr)
+        self.assertFalse((self.cfg/'candidate/config.json').exists())
 
     def mock_transaction(self):
         return '''

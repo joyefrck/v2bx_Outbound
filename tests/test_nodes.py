@@ -292,3 +292,48 @@ m_edit
         after = json.loads(self.config.read_text())
         self.assertEqual(after['Nodes'][-1]['Core'], 'another-core')
         self.assertEqual(after['Cores'], config['Cores'])
+
+    def test_multiple_ids_append_together_preserving_existing_nodes_and_routes(self):
+        code = self.setup_nodes(named=True)
+        before = json.loads(self.config.read_text())
+        routes = self.out.read_bytes(), self.route.read_bytes()
+        r = self.run_shell(code+'m_edit', '2\nhttps://new.invalid\nfixture-key\ny\n1\n33,34,35\n2\ny\nn\ny\n')
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after['Nodes'][:2], before['Nodes'])
+        self.assertEqual([n['NodeID'] for n in after['Nodes'][2:]], [33, 34, 35])
+        self.assertTrue(all(n['Core']=='custom-core' for n in after['Nodes']))
+        self.assertEqual(after['Cores'], before['Cores'])
+        self.assertEqual(routes, (self.out.read_bytes(), self.route.read_bytes()))
+        self.assertEqual(r.stderr.count('请选择协议'), 1)
+        self.assertEqual((self.cfg/'calls').read_text(), 'is-active\nstop\nstart\n')
+
+    def test_multiple_ids_conflicting_with_existing_node_save_nothing(self):
+        code = self.setup_nodes()
+        before = self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()
+        r = self.run_shell(code+'m_edit', '2\nhttps://panel.invalid\nfixture-key\ny\n1\n33,1,34\n2\ny\nn\ny\n', check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('重复', r.stderr)
+        self.assertEqual(before, (self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()))
+        self.assertFalse((self.cfg/'calls').exists())
+
+    def test_multiple_ids_cancel_or_interruption_saves_nothing(self):
+        code = self.setup_nodes()
+        before = self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()
+        prefix = '2\nhttps://new.invalid\nfixture-key\ny\n1\n33,34\n'
+        for answers in [prefix, prefix+'2\ny\nn\nn\n']:
+            with self.subTest(answers=answers):
+                self.run_shell(code+'m_edit', answers, check=False)
+                self.assertEqual(before, (self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()))
+                self.assertFalse((self.cfg/'calls').exists())
+                self.assertEqual(list(self.cfg.glob('.manager-nodes.*')), [])
+
+    def test_multiple_ids_service_failure_rolls_back_entire_batch_and_new_core(self):
+        code = self.setup_nodes()
+        before = self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()
+        r = self.run_shell(code+'m_health() { return 1; }; m_edit',
+                           '2\nhttps://new.invalid\nfixture-key\ny\n2\n33,34\n1\nn\nn\ny\n', check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('已恢复原配置', r.stdout)
+        self.assertEqual(before, (self.config.read_bytes(), self.out.read_bytes(), self.route.read_bytes()))
+        self.assertEqual(self.config.stat().st_mode & 0o777, 0o640)
+        self.assertFalse(self.origin.exists())
