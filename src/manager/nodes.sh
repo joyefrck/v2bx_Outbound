@@ -135,8 +135,8 @@ m_add_existing_core() {
     local candidate="$N_STAGE/new-nodes" kind file count position ref choice total
     local required=()
     mkdir "$candidate" || return 1
-    printf '使用与菜单 2 相同的节点填写向导；完成后只追加新节点，保留原有节点和出口配置。\n'
-    m_collect_nodes "$candidate" || return 1
+    printf '默认复用已有面板配置，也可手动填写；完成后只追加新节点，保留原有节点和出口配置。\n'
+    m_collect_nodes "$candidate" "$N_STAGE/config.json" || return 1
     jq -s . "$candidate/nodes.jsonl" > "$candidate/batch.json" || return 1
     total=$(jq length "$candidate/batch.json") || return 1
     for ((position=0;position<total;position++)); do

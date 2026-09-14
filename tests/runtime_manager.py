@@ -246,7 +246,7 @@ wait_job
         preserved_node = json.loads(Path('/etc/V2bX/config.json').read_text())['Nodes'][0]
         preserved_rules = Path('/etc/V2bX/route.json').read_bytes()
         manage([('请选择操作', '2'),
-                ('请输入面板网址', f'http://127.0.0.1:{panel.server_port}'), ('请输入面板对接 API Key', KEY),
+                ('请选择面板配置', ''),
                 ('后续节点是否共用', 'y'), ('节点核心：', '1'), ('请输入节点 Node ID', '2'), ('协议：', '2'), ('是否为 Reality', 'n'), ('是否配置 TLS', 'n'), ('是否继续添加节点', 'y'),
                 ('节点核心：', '1'), ('请输入节点 Node ID', '4'), ('协议：', '2'),
                 ('是否为 Reality', 'n'), ('是否配置 TLS', 'n'), ('是否继续添加节点', 'n'),

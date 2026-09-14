@@ -1,6 +1,35 @@
 # Shared node wizard, adapted from upstream initconfig.sh (MPL-2.0).
 m_panel() {
+    local existing=${1:-} profiles="$candidate/panels.json" count choice
     m_section '面板连接'
+    if [[ -n $existing ]]; then
+        # Keep each address/key pair together and preserve first-seen order.
+        # The candidate directory is private; credentials never enter argv/output.
+        jq '[.Nodes[] | select((.ApiHost|type)=="string" and (.ApiKey|type)=="string") |
+          select((.ApiHost|test("^https?://[^\\s]+$")) and
+                 (.ApiKey|length)>0 and (.ApiKey|test("[\\r\\n]")|not))] |
+          reduce .[] as $n ([];
+            if any(.[]; .ApiHost==$n.ApiHost and .ApiKey==$n.ApiKey) then .
+            else .+[$n|{ApiHost,ApiKey,NodeID}] end)' "$existing" > "$profiles" || return 1
+        count=$(jq length "$profiles") || return 1
+        if ((count>0)); then
+            m_line 37 '  已读取现有节点的面板配置，回车复用第 1 套地址与 API Key。'
+            jq -r 'to_entries[]|"  \(.key+1). 面板：\(.value.ApiHost|@json) | 来源节点 ID：\(.value.NodeID|@json)"' "$profiles"
+            m_option 0 '手动填写其他面板地址与 API Key'
+            m_ask "请选择面板配置 [0-${count}]（回车 1）" || return 1
+            choice=${M_REPLY:-1}
+            if [[ $choice != 0 ]]; then
+                [[ $choice =~ ^[1-9][0-9]{0,5}$ ]] && ((choice<=count)) || {
+                    m_error '面板配置序号无效。'; return 1;
+                }
+                api_host=$(jq -r --argjson i "$((choice-1))" '.[$i].ApiHost' "$profiles") || return 1
+                api_key=$(jq -r --argjson i "$((choice-1))" '.[$i].ApiKey' "$profiles") || return 1
+                M_REPLY=''
+                m_line 32 '  ✓ 已复用所选面板地址与 API Key。'
+                return 0
+            fi
+        fi
+    fi
     m_ask '请输入面板网址（https://example.com）' || return 1
     [[ $M_REPLY =~ ^https?://[^[:space:]]+$ ]] || { m_error '面板地址须以 http:// 或 https:// 开头。'; return 1; }
     api_host=$M_REPLY
@@ -67,16 +96,20 @@ m_node() {
     m_line 32 "  ✓ 节点已填写 · ID ${node_ids} · ${core} / ${protocol}"
 }
 m_collect_nodes() {
-    local candidate=$1 api_host='' api_key='' fixed=n node_number=1
-    m_panel || return 1
-    m_ask '后续节点是否共用面板地址与 API Key？[y/N]' || return 1; fixed=$M_REPLY
+    local candidate=$1 existing=${2:-} api_host='' api_key='' fixed=n node_number=1
+    m_panel "$existing" || return 1
+    if [[ -n $existing ]]; then
+        m_ask '后续节点是否共用面板地址与 API Key？[Y/n]' || return 1; fixed=${M_REPLY:-y}
+    else
+        m_ask '后续节点是否共用面板地址与 API Key？[y/N]' || return 1; fixed=$M_REPLY
+    fi
     while true; do
         m_section "第 ${node_number} 组节点（可填单个或多个 ID）"
         m_node || return 1
         m_ask '是否继续添加节点？[y/N]' || return 1
         [[ $M_REPLY == [yY] ]] || break
         node_number=$((node_number+1))
-        [[ $fixed == [yY] ]] || m_panel || return 1
+        [[ $fixed == [yY] ]] || m_panel "$existing" || return 1
     done
     api_key=''; M_REPLY=''
     jq -se '[.[] | [.ApiHost, (.NodeType|ascii_downcase), .NodeID]] |
