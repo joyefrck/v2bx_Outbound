@@ -133,7 +133,9 @@ m_menu() {
         m_ask '请选择 [1-19]' || return 0; choice=$M_REPLY
         case $choice in
             1) m_edit;; 11) m_install_flow;;
-            13) m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY";;
+            13)
+                m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY"
+                m_ask '按回车返回菜单' || return 0;;
             18) m_uninstall;; 6) m_service start;; 7) m_service stop;; 8) m_service restart;;
             4) systemctl status V2bX --no-pager;; 5) m_logs '返回菜单';;
             9) m_service enable;; 10) m_service disable;; 16) m_bbr;;

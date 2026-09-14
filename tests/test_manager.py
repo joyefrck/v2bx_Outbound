@@ -117,7 +117,7 @@ m_menu
 '''
         for number, expected in actions.items():
             with self.subTest(number=number):
-                inputs = str(number) + '\n' + ('fixture-version\n' if number == 13 else '') + '19\n'
+                inputs = str(number) + '\n' + ('fixture-version\n\n' if number == 13 else '') + '19\n'
                 result = self.run_shell(body, inputs)
                 actual = [line.removeprefix('ACTION:') for line in result.stdout.splitlines()
                           if line.startswith('ACTION:')]
