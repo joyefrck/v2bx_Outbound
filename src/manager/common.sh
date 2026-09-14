@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.6.2
+MANAGER_VERSION=3.7.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -57,7 +57,7 @@ m_platform() {
 }
 m_apt_dependencies() (
     local distro=$1 version=$2 stage=''
-    local packages=(jq curl unzip ca-certificates iproute2 util-linux coreutils socat cron)
+    local packages=(jq curl unzip openssl ca-certificates iproute2 util-linux coreutils socat cron)
     local options=(-o APT::Update::Error-Mode=any -o Acquire::Retries=2
         -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
     if apt-get "${options[@]}" update &&
@@ -108,7 +108,7 @@ SOURCES
 )
 m_dependencies() {
     local c missing=false
-    for c in jq curl unzip ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || missing=true; done
+    for c in jq curl unzip openssl timeout ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || missing=true; done
     [[ $missing == true ]] || return 0
     printf '正在安装运行依赖（Bash、jq、curl 和系统工具，不需要 Python）……\n'
     if command -v apt-get >/dev/null 2>&1; then
@@ -116,11 +116,11 @@ m_dependencies() {
         source /etc/os-release
         m_apt_dependencies "$ID" "$VERSION_ID" || return 1
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y jq curl unzip ca-certificates iproute util-linux coreutils socat cronie
+        dnf install -y jq curl unzip openssl ca-certificates iproute util-linux coreutils socat cronie
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y epel-release && yum install -y jq curl unzip ca-certificates iproute util-linux coreutils socat cronie
+        yum install -y epel-release && yum install -y jq curl unzip openssl ca-certificates iproute util-linux coreutils socat cronie
     else m_error '无法安装依赖。'; return 1; fi
-    for c in jq curl unzip ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || return 1; done
+    for c in jq curl unzip openssl timeout ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || return 1; done
 }
 m_installed() { [[ -x $M_BINARY/V2bX ]]; }
 m_need_install() { m_installed || { m_error '请先使用菜单 11 安装 V2bX。'; return 1; }; }

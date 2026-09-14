@@ -1,0 +1,191 @@
+[
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/vless/inbound.go",
+    "replacement": "sing-box@v1.14.0/protocol/vless/inbound.go",
+    "upstream_sha256": "17b4cd26fd0629576f5ac11530cfd4b26ebe0f1b41746e712f4602e2dc42ab57",
+    "sha256": "e799f23adf2e9d5e665d3409a299a2851345441ac7332d8621ba4e7334729327"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/vless/managed_users.go",
+    "replacement": "sing-box@v1.14.0/protocol/vless/managed_users.go",
+    "upstream_sha256": null,
+    "sha256": "79431815ccc1262cb96cc64674627e1e0242229e7edb0e23af938c8e079b13dc"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/vmess/inbound.go",
+    "replacement": "sing-box@v1.14.0/protocol/vmess/inbound.go",
+    "upstream_sha256": "f2ff0737b856b4f4199681399d16ab22c287ab2bb97fae4bc911ef5d8e3b26a3",
+    "sha256": "d2c419cd21d0e33db3d6f64004d91032345a649c2604d5d72ff7ca2e3fd55627"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/vmess/managed_users.go",
+    "replacement": "sing-box@v1.14.0/protocol/vmess/managed_users.go",
+    "upstream_sha256": null,
+    "sha256": "e026a5d93db995ca746afa4ce5a88b0af5ccfa82e8e9eeb066ae96d236cd9d71"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/trojan/inbound.go",
+    "replacement": "sing-box@v1.14.0/protocol/trojan/inbound.go",
+    "upstream_sha256": "6521afdd9afc8215f96278763b06c7a25f15b7bc7861c9805e397a311bf03c2c",
+    "sha256": "0f0383738ef9bbb7c704c44ce7dd0f631669b667c73fe15e76a46ef08d90af5f"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/trojan/managed_users.go",
+    "replacement": "sing-box@v1.14.0/protocol/trojan/managed_users.go",
+    "upstream_sha256": null,
+    "sha256": "32bb22c39b153a4d7a0572b52fa69e1f55476467dfa06aa8533891ace7c8697a"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/tuic/inbound.go",
+    "replacement": "sing-box@v1.14.0/protocol/tuic/inbound.go",
+    "upstream_sha256": "fa7647b3b7f93523c871e5b64c0da1bd4632306729f9f328cc8c0ebd48114b72",
+    "sha256": "a6ba2d71e9afd248f50e74866fed03232b4030d67f35779aeac39401deb1e051"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/tuic/managed_users.go",
+    "replacement": "sing-box@v1.14.0/protocol/tuic/managed_users.go",
+    "upstream_sha256": null,
+    "sha256": "8e62f8a422abaed96cd5a9a3c5333d5e42ca0e772a487c31e42f02ee1983b58b"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/hysteria/inbound.go",
+    "replacement": "sing-box@v1.14.0/protocol/hysteria/inbound.go",
+    "upstream_sha256": "9642fc77e6eecee302a4eb307b28e7f6ca12adecc23dad362e18a1b20fbe65be",
+    "sha256": "fa0f38d29d290590ae9d0dc9852cb4e5380691c6ea048150bec68a5eac3bc377"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/hysteria/managed_users.go",
+    "replacement": "sing-box@v1.14.0/protocol/hysteria/managed_users.go",
+    "upstream_sha256": null,
+    "sha256": "06885f1a7d0508f43caf520ffbd994239765cbe83df07f267a7ba5c21ee6fc46"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/hysteria2/inbound.go",
+    "replacement": "sing-box@v1.14.0/protocol/hysteria2/inbound.go",
+    "upstream_sha256": "f7959dd2a86ddf282cd96d9ddafd1e776bc84cf47e5e99e3fa36cddd0ca1b980",
+    "sha256": "1787d4a7b60342dc9f302ea1913a02d7d94fead2cfafef291f694d224f6aada6"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/hysteria2/managed_users.go",
+    "replacement": "sing-box@v1.14.0/protocol/hysteria2/managed_users.go",
+    "upstream_sha256": null,
+    "sha256": "8e097ec29b7b80af19e26f575883272442f6856dd3c6714a355e1bfb137e7d8f"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/anytls/inbound.go",
+    "replacement": "sing-box@v1.14.0/protocol/anytls/inbound.go",
+    "upstream_sha256": "bce224ce39fd69504fed58c6b2d93e62ff7ae795441ca9cf18747763aeb634d1",
+    "sha256": "566614af20b69d08410a9cc0835a0536a64c76dff6c5b2cfd0c65cf288f1a1f0"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/anytls/managed_users.go",
+    "replacement": "sing-box@v1.14.0/protocol/anytls/managed_users.go",
+    "upstream_sha256": null,
+    "sha256": "132a724918baba0959e3a06caf4a632965a14acabb49c6d737b4a0372690d09e"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "protocol/shadowsocks/inbound_multi.go",
+    "replacement": "sing-box@v1.14.0/protocol/shadowsocks/inbound_multi.go",
+    "upstream_sha256": "8f6b63f5c180b899fdefc6b3082715be26bd19557bbf79e9b6d82349ff10b623",
+    "sha256": "d78f78b10a22e960c18392d8cce9413bc5f8876cf6f3ca360ec8f7a2f3adb385"
+  },
+  {
+    "module": "github.com/sagernet/sing-vmess@v0.2.8-0.20250909125414-3aed155119a1",
+    "path": "vless/service.go",
+    "replacement": "sing-vmess@v0.2.8-0.20250909125414-3aed155119a1/vless/service.go",
+    "upstream_sha256": "2e3a18878ac06cbfc0ec2b7a65876ede9ffe4358affd95fd4fc833a46fa28a80",
+    "sha256": "4eb25418849abc1f53d80ab2ba7fdeed0bcfea1af3db20c66b2c5933ee6d9a3d"
+  },
+  {
+    "module": "github.com/sagernet/sing-vmess@v0.2.8-0.20250909125414-3aed155119a1",
+    "path": "service.go",
+    "replacement": "sing-vmess@v0.2.8-0.20250909125414-3aed155119a1/service.go",
+    "upstream_sha256": "acd0471fcbc1f2aab0e3b6cdece0d0608a16b8463eee1fdc718cdc76e03ef5ca",
+    "sha256": "68bd775c9ca8d5927a099b82277a264468b535f17071c22f61dde282d07592a3"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "transport/trojan/service.go",
+    "replacement": "sing-box@v1.14.0/transport/trojan/service.go",
+    "upstream_sha256": "6ffe5d2408d4b391b2e625de0777debecbd02c1a01c1b079f46c18fcac114edf",
+    "sha256": "3ec5949591c98fd11f532c4c265386d444f25328d610ebb15de778252553df7d"
+  },
+  {
+    "module": "github.com/anytls/sing-anytls@v0.0.11",
+    "path": "service.go",
+    "replacement": "sing-anytls@v0.0.11/service.go",
+    "upstream_sha256": "eab7bd2b780ece06bef1711e59f84d64f3d85a0f3de7db10186da0392ce47837",
+    "sha256": "5eef3d3a6f766b2629a1822b905dd74a7e4f2f31253d332d7cbaf9aead8b56e3"
+  },
+  {
+    "module": "github.com/sagernet/sing-quic@v0.7.0-beta.4",
+    "path": "tuic/service.go",
+    "replacement": "sing-quic@v0.7.0-beta.4/tuic/service.go",
+    "upstream_sha256": "1b66f7e3c6a787f9468c0b687fd257b0b2dafc6386b3567f20121b00388c8f87",
+    "sha256": "39ad0ee314e7dd62afed9a9b77504e200da4d98f0d540080f73ba921f627900d"
+  },
+  {
+    "module": "github.com/sagernet/sing-quic@v0.7.0-beta.4",
+    "path": "hysteria/service.go",
+    "replacement": "sing-quic@v0.7.0-beta.4/hysteria/service.go",
+    "upstream_sha256": "9e761c882abed714e08d48e666049baa1ced7cd19b46f2144983f9416a28ddea",
+    "sha256": "ce825fe289bfb2bec6e46c8ef3be9ab5ef227d0a84535bc4c677d4f327bf8e2c"
+  },
+  {
+    "module": "github.com/sagernet/sing-quic@v0.7.0-beta.4",
+    "path": "hysteria2/service.go",
+    "replacement": "sing-quic@v0.7.0-beta.4/hysteria2/service.go",
+    "upstream_sha256": "a71a570f04a5cc077c8a6dc5f838ad67df718998f837ae13e4e8a98d5db995e7",
+    "sha256": "0f885ee95ffd0b03b71ba3c68f5d2c704343ef96e43cd9e856d7c09191b2bf4c"
+  },
+  {
+    "module": "github.com/sagernet/sing-shadowsocks@v0.2.8",
+    "path": "shadowaead/service_multi.go",
+    "replacement": "sing-shadowsocks@v0.2.8/shadowaead/service_multi.go",
+    "upstream_sha256": "5173c5a663d11395ce9a50c69153a53b47640bddde11bb43906e5714debbf12c",
+    "sha256": "1fee150b52680348a14ecabef162971bc3a302c5e6e04c65e55c65d0605bd11b"
+  },
+  {
+    "module": "github.com/sagernet/sing-shadowsocks@v0.2.8",
+    "path": "shadowaead_2022/service_multi.go",
+    "replacement": "sing-shadowsocks@v0.2.8/shadowaead_2022/service_multi.go",
+    "upstream_sha256": "bcfe41fb547eb6eedc15d53e4de564bc4055c9bfe0419e3d98cbbffb26cbc0b2",
+    "sha256": "0fa9a80b4ecfbab922762c4cb5da92be97bef85e37613d52ffc7d61ad280c32f"
+  },
+  {
+    "module": "github.com/sagernet/sing-box@v1.14.0",
+    "path": "route/network.go",
+    "replacement": "sing-box/route/network.go",
+    "upstream_sha256": "71b789e7451e1bdf41cbff34e310859d5001c310c83b1e1d80fd317e19d20618",
+    "sha256": "e90447684c1de5ba3428618af290d33acf40df87e41f3e8185a835b37b0e808e"
+  },
+  {
+    "module": "github.com/xtls/xray-core@v1.260327.0",
+    "path": "transport/internet/tls/config.go",
+    "replacement": "xray/transport/internet/tls/config.go",
+    "upstream_sha256": "331a74916d525934e9f955309455e572fab97f192e9f39cf592b8f79d997d774",
+    "sha256": "3e1fcc77143034c49e704e5596d5b909dcd387be3e1951f4b811b27e5ae4c1ed"
+  },
+  {
+    "module": "github.com/anytls/sing-anytls@v0.0.11",
+    "path": "session/stream.go",
+    "replacement": "anytls/session/stream.go",
+    "upstream_sha256": "1f7ebfeb99ab5b0857d007dfedf664a667ef513aa3c95637ee58e86569a972d3",
+    "sha256": "835fecc7efced240e2b24c1b2cb9033a040e7a4df36b9c5518d00516836a70ad"
+  }
+]

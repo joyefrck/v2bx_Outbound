@@ -1,0 +1,89 @@
+name: Verify and build official cores
+on:
+  push:
+    paths: ['runtime/**', 'scripts/**', 'src/manager/**', 'tests/**', '.github/workflows/core-runtime.yml']
+  pull_request:
+    paths: ['runtime/**', 'scripts/**', 'src/manager/**', 'tests/**', '.github/workflows/core-runtime.yml']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated locked version as a stable core release
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: official-core-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26.1'
+          cache-dependency-path: runtime/go.sum
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq unzip openssl
+      - name: Test manager and prepare locked patches
+        run: |
+          bash build.sh
+          git diff --exit-code -- v2bx-manager.sh SHA256SUMS
+          python3 -m unittest discover -s tests -v
+          python3 scripts/core_overlay.py "$RUNNER_TEMP/core.json"
+      - name: Test all runtime packages and concurrent protocol lifecycles
+        working-directory: runtime
+        env:
+          GOEXPERIMENT: jsonv2
+        run: |
+          tags='sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor'
+          go test -timeout 180s -modfile="$RUNNER_TEMP/core.mod" -mod=readonly -tags "$tags" ./...
+          go test -race -timeout 180s -modfile="$RUNNER_TEMP/core.mod" -mod=readonly -tags "$tags" ./core/sing ./common/counter
+      - name: Build locked runtime, corresponding source and Geo snapshot
+        run: python3 scripts/build_core.py --output "$RUNNER_TEMP/core-dist" --arch '${{ matrix.arch }}'
+        env:
+          GOEXPERIMENT: jsonv2
+      - name: Verify SOCKS egress with the built runtime
+        run: |
+          python3 tests/runtime_xray.py "$RUNNER_TEMP/core-dist/V2bX"
+          python3 tests/runtime_xray.py "$RUNNER_TEMP/core-dist/V2bX" sing
+          python3 tests/runtime_config.py "$RUNNER_TEMP/core-dist/V2bX"
+      - name: Verify detached core transactions with systemd
+        run: sudo env V2BX_SYSTEMD_TEST=1 python3 -m unittest discover -s tests -p test_core_jobs.py -v
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: core-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/core-dist/*.zip
+            ${{ runner.temp }}/core-dist/manifest-*.json
+            ${{ runner.temp }}/core-dist/source-*.tar.gz
+          if-no-files-found: error
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: core-linux-*
+          merge-multiple: true
+          path: core-dist
+      - name: Verify provenance, sign manifests and publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_RELEASE_SIGNING_KEY: ${{ secrets.CORE_RELEASE_SIGNING_KEY }}
+        run: python3 scripts/publish_core.py core-dist

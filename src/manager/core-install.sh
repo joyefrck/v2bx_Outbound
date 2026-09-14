@@ -1,29 +1,4 @@
 # Installation layout adapted from upstream install.sh (MPL-2.0).
-m_arch() {
-    case $(uname -m) in x86_64|amd64) printf 64;; aarch64|arm64) printf arm64-v8a;; s390x) printf s390x;; *) return 1;; esac
-}
-m_prepare_core() {
-    local stage=$1 version=${2:-} arch file entry
-    arch=$(m_arch) || return 1
-    if [[ -z $version ]]; then
-        m_fetch 'https://api.github.com/repos/wyx2685/V2bX/releases/latest' "$stage/release.json" || return 1
-        version=$(jq -er '.tag_name' "$stage/release.json") || return 1
-    fi
-    [[ $version =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || { m_error '版本号无效。'; return 1; }
-    printf '正在下载 V2bX %s（%s）……\n' "$version" "$arch"
-    m_fetch "https://github.com/wyx2685/V2bX/releases/download/$version/V2bX-linux-$arch.zip" "$stage/core.zip" || return 1
-    unzip -tq "$stage/core.zip" >/dev/null || return 1
-    unzip -Z1 "$stage/core.zip" > "$stage/entries" || return 1
-    while IFS= read -r entry; do
-        [[ $entry != /* && $entry != ../* && $entry != */../* && $entry != *\\* ]] || return 1
-    done < "$stage/entries"
-    mkdir "$stage/new" || return 1
-    unzip -q "$stage/core.zip" -d "$stage/new" || return 1
-    [[ -z $(find "$stage/new" -type l -print -quit) ]] || { m_error '发布包包含符号链接。'; return 1; }
-    for file in V2bX geoip.dat geosite.dat; do [[ -s $stage/new/$file ]] || return 1; done
-    chmod 755 "$stage/new/V2bX" || return 1
-    "$stage/new/V2bX" version >/dev/null || { m_error '下载的 V2bX 无法运行。'; return 1; }
-}
 m_write_unit() {
     cat > "$1" <<UNIT
 [Unit]
@@ -76,7 +51,7 @@ m_core_report_row() {
 }
 m_core_report() {
     m_section '内核更新明细（更新前 → 更新后）'
-    m_line 37 '  来源：wyx2685/V2bX 上游发布包；文件指纹为 SHA256 前 16 位。'
+    m_line 37 '  来源：本仓库官方源码适配构建；文件指纹为 SHA256 前 16 位。'
     m_line 37 "  V2bX 版本：${before_version} → $(m_core_version "$M_BINARY/V2bX")"
     m_core_report_row 'V2bX 主程序' "$before_program" "$(m_core_file_hash "$M_BINARY/V2bX")"
     m_core_report_row 'GeoIP IP 规则库（geoip.dat）' "$before_geoip" "$(m_core_file_hash "$M_CONFIG/geoip.dat")"
@@ -113,7 +88,7 @@ m_install_core() (
             else systemctl disable V2bX >/dev/null 2>&1 || true; rm -f "$M_UNIT" || restored=false; fi
             systemctl daemon-reload || restored=false
             if [[ $restored == true ]]; then
-                [[ $was_active != true ]] || systemctl start V2bX || restored=false
+                [[ $was_active != true ]] || { systemctl start V2bX && m_health; } || restored=false
             fi
             if [[ $restored == true ]]; then
                 printf '安装 / 更新失败，已恢复原文件和服务状态。\n'
@@ -139,8 +114,17 @@ m_install_core() (
     before_unit=$(m_core_file_hash "$M_UNIT")
     before_payload=$(m_core_tree_hash "$M_BINARY" || printf '无法读取')
     report_ready=true
-    m_line 37 '将检查 V2bX 主程序、GeoIP 和 GeoSite 规则库；已有服务文件保留。'
+    m_line 37 '将检查已签名内核包和本地配置；更新时保留现用 Geo 数据。'
     m_prepare_core "$stage" "${1:-}" || exit 1
+    # Geo datasets are independent. Do not replace custom/current Geo data as
+    # a side effect of a runtime update, including old layouts without metadata.
+    if [[ $existed == true ]]; then
+        for file in "${M_FILES[@]}"; do
+            [[ -f $M_CONFIG/$file && ! -L $M_CONFIG/$file ]] || { m_error '现用 Geo 文件缺失，请先修复。'; exit 1; }
+            cp -p "$M_CONFIG/$file" "$stage/new/$file" || exit 1
+        done
+    fi
+    m_core_preflight "$stage/new/V2bX" || exit 1
     candidate_payload=$(m_core_tree_hash "$stage/new" || printf '无法读取')
     if [[ $existed == true && -f $M_UNIT && $before_payload =~ ^[0-9a-f]{64}$ &&
           $before_payload == "$candidate_payload" && $before_geoip =~ ^[0-9a-f]{64}$ &&
@@ -160,6 +144,7 @@ m_install_core() (
     if [[ -d $M_BINARY ]]; then cp -a "$M_BINARY" "$backup/binary" || exit 1; fi
     systemctl is-active --quiet V2bX && was_active=true
     if [[ $unit_existed != true ]]; then m_write_unit "$stage/V2bX.service" || exit 1; fi
+    jq -n --arg binary_sha "$before_program" --argjson active "$was_active" '{schema:1,binary_sha:$binary_sha,was_active:$active}' > "$backup/core-backup.json" || exit 1
     armed=true
     if [[ $existed == true || $unit_existed == true ]]; then systemctl stop V2bX || exit 1; fi
     if [[ -d $M_BINARY ]]; then mv "$M_BINARY" "$stage/old" || exit 1; fi
@@ -170,6 +155,7 @@ m_install_core() (
         install -m 644 "$stage/V2bX.service" "$M_UNIT" && systemctl daemon-reload && systemctl enable V2bX || exit 1
     fi
     if [[ $was_active == true ]]; then systemctl start V2bX && m_health || exit 1; fi
+    printf '%s\n' "$backup" > "$M_CONFIG/last-core-backup.next" && mv "$M_CONFIG/last-core-backup.next" "$M_CONFIG/last-core-backup" || exit 1
     armed=false
     printf 'V2bX 二进制安装 / 更新完成。备份：%s\n' "$backup"
     if [[ $was_active == true ]]; then core_outcome='已应用发布包，服务已重新启动并通过运行检查。'

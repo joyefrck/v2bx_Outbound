@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.6.2
+MANAGER_VERSION=3.7.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -57,7 +57,7 @@ m_platform() {
 }
 m_apt_dependencies() (
     local distro=$1 version=$2 stage=''
-    local packages=(jq curl unzip ca-certificates iproute2 util-linux coreutils socat cron)
+    local packages=(jq curl unzip openssl ca-certificates iproute2 util-linux coreutils socat cron)
     local options=(-o APT::Update::Error-Mode=any -o Acquire::Retries=2
         -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
     if apt-get "${options[@]}" update &&
@@ -108,7 +108,7 @@ SOURCES
 )
 m_dependencies() {
     local c missing=false
-    for c in jq curl unzip ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || missing=true; done
+    for c in jq curl unzip openssl timeout ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || missing=true; done
     [[ $missing == true ]] || return 0
     printf '正在安装运行依赖（Bash、jq、curl 和系统工具，不需要 Python）……\n'
     if command -v apt-get >/dev/null 2>&1; then
@@ -116,11 +116,11 @@ m_dependencies() {
         source /etc/os-release
         m_apt_dependencies "$ID" "$VERSION_ID" || return 1
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y jq curl unzip ca-certificates iproute util-linux coreutils socat cronie
+        dnf install -y jq curl unzip openssl ca-certificates iproute util-linux coreutils socat cronie
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y epel-release && yum install -y jq curl unzip ca-certificates iproute util-linux coreutils socat cronie
+        yum install -y epel-release && yum install -y jq curl unzip openssl ca-certificates iproute util-linux coreutils socat cronie
     else m_error '无法安装依赖。'; return 1; fi
-    for c in jq curl unzip ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || return 1; done
+    for c in jq curl unzip openssl timeout ss ip flock sha256sum systemd-run; do command -v "$c" >/dev/null 2>&1 || return 1; done
 }
 m_installed() { [[ -x $M_BINARY/V2bX ]]; }
 m_need_install() { m_installed || { m_error '请先使用菜单 11 安装 V2bX。'; return 1; }; }
@@ -268,7 +268,8 @@ EOF
     "servers": [
       {
         "tag": "cf",
-        "address": "1.1.1.1"
+        "type": "udp",
+        "server": "1.1.1.1"
       }
     ],
     "strategy": "$dnsstrategy"
@@ -281,17 +282,13 @@ EOF
         "server": "cf",
         "strategy": "$dnsstrategy"
       }
-    },
-    {
-      "type": "block",
-      "tag": "block"
     }
   ],
   "route": {
     "rules": [
       {
         "ip_is_private": true,
-        "outbound": "block"
+        "action": "reject"
       },
       {
         "domain_regex": [
@@ -318,7 +315,7 @@ EOF
             "(.*.||)(laomoe|jiyou|ssss|lolicp|vv1234|0z|4321q|868123|ksweb|mm126).(com|cloud|fun|cn|gs|xyz|cc)",
             "(flows|miaoko).(pages).(dev)"
         ],
-        "outbound": "block"
+        "action": "reject"
       },
       {
         "outbound": "direct",
@@ -561,32 +558,129 @@ m_generate() (
     m_line '1;32' '  ✓ 节点配置已保存，服务运行检查通过。'
     m_line 36 "  备份：${backup}"
 )
-# Installation layout adapted from upstream install.sh (MPL-2.0).
+# Official modules are linked into our own runtime; standalone upstream binaries
+# cannot replace these embedded cores. Only reviewed core-* releases are installable.
+M_CORE_REPO=joyefrck/v2bx_Outbound
 m_arch() {
-    case $(uname -m) in x86_64|amd64) printf 64;; aarch64|arm64) printf arm64-v8a;; s390x) printf s390x;; *) return 1;; esac
+    case $(uname -m) in x86_64|amd64) printf amd64;; aarch64|arm64) printf arm64;; *) m_error '官方内核通道目前只提供 Linux amd64 / arm64。'; return 1;; esac
+}
+m_core_public_key() {
+    cat <<'PUBLIC_KEY'
+-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAqpIrKsQf5BCQvnLNf1Da
+nfv7tdnwNg46WTKNnZ+Aop8VWyz5R/QA8KYT5hb3TiSU6o6jcAeR268U3T7NQm27
+wa0ea1Z+MBJhpYiyt4bguEnFLPEhcufdmgRQFLyHe9BDiXHAe8n/yh3ISi44Ge0Y
+h/LsGnSo6H0PZ22Zukegq2/E1IRmNXkF2znwuFGTNoiWjGcRsJcxIImq7tGgMcS8
+dvhY8bpY3CBT1fRJ8E9bQOyNZO5hXDmoFQ+xtKEmoe9zVfMaRyjp1zkRtMKo4lP5
+4l30wubHNJkep9/7g6p07XRsgo8uPaIKC9ORC9Nz+ZovAjEYKX8eNXIWR55BzKCM
+v4f4dRFmdZCQDlAoKe8xc07c24mcR7GzvHjey1xoVKC0JPC9MOdtpuTmNyQy1WJU
+Hk8MJGeWQiRmv2Y1/xeaXYxbOIWvxZ4+fPVeF5sIaBtOAy28oI66fabG9R3X0KGQ
+puPIrFrGhPT+mcU1YGG/39/QvmmW40E76uMk8xVWcdb9AgMBAAE=
+-----END PUBLIC KEY-----
+PUBLIC_KEY
+}
+m_core_release() {
+    local output=$1 tag=${2:-}
+    if [[ -n $tag ]]; then
+        [[ $tag =~ ^core-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { m_error '请使用本仓库 core-vX.Y.Z 版本号。'; return 1; }
+        m_fetch "https://api.github.com/repos/$M_CORE_REPO/releases/tags/$tag" "$output" || return 1
+        jq -e --arg tag "$tag" '.tag_name==$tag and .draft==false and .prerelease==false' "$output" >/dev/null || return 1
+    else
+        m_fetch "https://api.github.com/repos/$M_CORE_REPO/releases?per_page=100" "$output.list" || return 1
+        jq -e '[.[]|select(.draft==false and .prerelease==false and (.tag_name|test("^core-v[0-9]+\\.[0-9]+\\.[0-9]+$")))]|sort_by(.published_at)|last // empty' "$output.list" > "$output" || {
+            m_error '尚无经过验证的稳定内核发布，保留当前版本；不会回退到旧 V2bX 下载源。'; return 1;
+        }
+    fi
+}
+m_core_manifest() {
+    local stage=$1 requested=${2:-} arch tag base manifest
+    arch=$(m_arch) || return 1
+    m_core_release "$stage/release.json" "$requested" || return 1
+    tag=$(jq -er '.tag_name' "$stage/release.json") || return 1
+    [[ $tag =~ ^core-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    base="https://github.com/$M_CORE_REPO/releases/download/$tag"
+    manifest="manifest-linux-$arch.json"
+    m_fetch "$base/$manifest" "$stage/manifest.json" && m_fetch "$base/$manifest.sig" "$stage/manifest.sig" || return 1
+    m_core_public_key > "$stage/public.pem" || return 1
+    openssl dgst -sha256 -verify "$stage/public.pem" -signature "$stage/manifest.sig" "$stage/manifest.json" >/dev/null 2>&1 || {
+        m_error '内核清单签名校验失败，未安装。'; return 1;
+    }
+    jq -e --arg tag "$tag" --arg arch "$arch" '
+      .schema==1 and .source_state=="commit" and .tag==$tag and .version==($tag|ltrimstr("core-")) and
+      .platform==("linux-"+$arch) and .asset==("V2bX-linux-"+$arch+".zip") and
+      (.source_revision|test("^[0-9a-f]{40}$")) and (.patch_index_sha256|test("^[0-9a-f]{64}$")) and
+      (.sha256|test("^[0-9a-f]{64}$")) and
+      (.files|keys)==["V2bX","build-info.json","cores.lock.json","geoip.dat","geosite.dat"] and
+      all(.files[];test("^[0-9a-f]{64}$")) and
+      (.cores|keys)==["hysteria2","hysteria2-extras","sing-box","xray"]
+    ' "$stage/manifest.json" >/dev/null || { m_error '清单格式或平台不匹配。'; return 1; }
 }
 m_prepare_core() {
-    local stage=$1 version=${2:-} arch file entry
+    local stage=$1 requested=${2:-} arch tag file entry expected actual count=0
+    m_core_manifest "$stage" "$requested" || return 1
     arch=$(m_arch) || return 1
-    if [[ -z $version ]]; then
-        m_fetch 'https://api.github.com/repos/wyx2685/V2bX/releases/latest' "$stage/release.json" || return 1
-        version=$(jq -er '.tag_name' "$stage/release.json") || return 1
-    fi
-    [[ $version =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || { m_error '版本号无效。'; return 1; }
-    printf '正在下载 V2bX %s（%s）……\n' "$version" "$arch"
-    m_fetch "https://github.com/wyx2685/V2bX/releases/download/$version/V2bX-linux-$arch.zip" "$stage/core.zip" || return 1
-    unzip -tq "$stage/core.zip" >/dev/null || return 1
-    unzip -Z1 "$stage/core.zip" > "$stage/entries" || return 1
+    tag=$(jq -er '.tag' "$stage/manifest.json") || return 1
+    printf '正在下载已验证内核 %s（Linux %s）……\n' "$tag" "$arch"
+    m_fetch "https://github.com/$M_CORE_REPO/releases/download/$tag/V2bX-linux-$arch.zip" "$stage/core.zip" || return 1
+    expected=$(jq -er '.sha256' "$stage/manifest.json") || return 1
+    [[ $(m_core_file_hash "$stage/core.zip") == "$expected" ]] || { m_error '发布包摘要不符。'; return 1; }
+    unzip -tq "$stage/core.zip" >/dev/null && unzip -Z1 "$stage/core.zip" > "$stage/entries" || return 1
     while IFS= read -r entry; do
-        [[ $entry != /* && $entry != ../* && $entry != */../* && $entry != *\\* ]] || return 1
+        case $entry in V2bX|build-info.json|cores.lock.json|geoip.dat|geosite.dat) ;; *) m_error '发布包包含非预期路径。'; return 1;; esac
+        count=$((count+1))
     done < "$stage/entries"
-    mkdir "$stage/new" || return 1
-    unzip -q "$stage/core.zip" -d "$stage/new" || return 1
-    [[ -z $(find "$stage/new" -type l -print -quit) ]] || { m_error '发布包包含符号链接。'; return 1; }
-    for file in V2bX geoip.dat geosite.dat; do [[ -s $stage/new/$file ]] || return 1; done
+    [[ $count == 5 ]] && (( $(LC_ALL=C sort -u "$stage/entries" | wc -l) == 5 )) || return 1
+    unzip -l "$stage/core.zip" | awk 'END {exit !($1 ~ /^[0-9]+$/ && $1 < 536870912)}' || return 1
+    mkdir "$stage/new" && unzip -q "$stage/core.zip" -d "$stage/new" || return 1
+    [[ -z $(find "$stage/new" -type l -print -quit) ]] || return 1
+    while IFS= read -r file; do
+        [[ -s $stage/new/$file && -f $stage/new/$file ]] || return 1
+        expected=$(jq -er --arg f "$file" '.files[$f]' "$stage/manifest.json") || return 1
+        [[ $(m_core_file_hash "$stage/new/$file") == "$expected" ]] || return 1
+    done < "$stage/entries"
     chmod 755 "$stage/new/V2bX" || return 1
-    "$stage/new/V2bX" version >/dev/null || { m_error '下载的 V2bX 无法运行。'; return 1; }
+    "$stage/new/V2bX" build-info > "$stage/actual.json" || return 1
+    jq -e --slurpfile m "$stage/manifest.json" '
+      .schema==1 and .source_state=="commit" and .os=="linux" and ("linux-"+.arch)==$m[0].platform and
+      .version==$m[0].version and .source_revision==$m[0].source_revision and
+      .patch_index_sha256==$m[0].patch_index_sha256 and
+      (.cores|sort)==["hysteria2","sing","xray"] and
+      (.modules as $actual | all($m[0].cores|to_entries[]; $actual[.key].path==.value.path and $actual[.key].version==.value.version))
+    ' "$stage/actual.json" >/dev/null || { m_error '实际编译内核与清单不符。'; return 1; }
+    # Keep signed provenance with the installed payload for auditing and rollback.
+    cp "$stage/manifest.json" "$stage/new/core-manifest.json" && cp "$stage/manifest.sig" "$stage/new/core-manifest.sig" || return 1
 }
+m_core_preflight() {
+    local binary=$1
+    [[ -f $M_CONFIG/config.json ]] || return 0
+    (cd "$M_BINARY" && timeout 45 "$binary" check-config -c "$M_CONFIG/config.json") || {
+        m_error '新内核本地配置预检查失败，服务未停止。请先处理配置兼容性。'; return 1;
+    }
+}
+m_core_versions() (
+    local stage name repo latest
+    umask 077
+    stage=$(mktemp -d /tmp/v2bx-versions.XXXXXX) || exit 1
+    trap 'rm -rf "$stage"' EXIT
+    m_section '内核版本：实际安装 / 官方稳定版 / 已适配可安装'
+    if [[ -x $M_BINARY/V2bX ]] && "$M_BINARY/V2bX" build-info > "$stage/installed.json" 2>/dev/null && jq -e '.schema==1' "$stage/installed.json" >/dev/null 2>&1; then
+        jq -r '.modules|to_entries[]|"  已安装 \(.key)：\(.value.version)"' "$stage/installed.json"
+    else
+        m_line 37 "  已安装 V2bX：$(m_core_version "$M_BINARY/V2bX")；旧构建无法可靠报告完整依赖版本。"
+        [[ ! -x $M_BINARY/V2bX ]] || "$M_BINARY/V2bX" version
+    fi
+    for name in xray sing-box hysteria2; do
+        case $name in xray) repo=XTLS/Xray-core;; sing-box) repo=SagerNet/sing-box;; hysteria2) repo=HyNetworks/hysteria;; esac
+        if m_fetch "https://api.github.com/repos/$repo/releases/latest" "$stage/upstream.json" &&
+           latest=$(jq -er 'select(.draft==false and .prerelease==false)|.tag_name' "$stage/upstream.json"); then
+            printf '  官方稳定版 %s：%s\n' "$name" "$latest"
+        else printf '  官方稳定版 %s：查询失败（保留已安装版本）\n' "$name"; fi
+    done
+    if m_core_manifest "$stage"; then
+        jq -r '"  已适配可安装：\(.tag)",(.cores|to_entries[]|"    \(.key)：\(.value.tag)（模块 \(.value.version)）")' "$stage/manifest.json"
+    else m_line 33 '  当前无法取得已签名的适配发布。官方新版仅作为候选，不能直接替换内嵌内核。'; fi
+)
+# Installation layout adapted from upstream install.sh (MPL-2.0).
 m_write_unit() {
     cat > "$1" <<UNIT
 [Unit]
@@ -639,7 +733,7 @@ m_core_report_row() {
 }
 m_core_report() {
     m_section '内核更新明细（更新前 → 更新后）'
-    m_line 37 '  来源：wyx2685/V2bX 上游发布包；文件指纹为 SHA256 前 16 位。'
+    m_line 37 '  来源：本仓库官方源码适配构建；文件指纹为 SHA256 前 16 位。'
     m_line 37 "  V2bX 版本：${before_version} → $(m_core_version "$M_BINARY/V2bX")"
     m_core_report_row 'V2bX 主程序' "$before_program" "$(m_core_file_hash "$M_BINARY/V2bX")"
     m_core_report_row 'GeoIP IP 规则库（geoip.dat）' "$before_geoip" "$(m_core_file_hash "$M_CONFIG/geoip.dat")"
@@ -676,7 +770,7 @@ m_install_core() (
             else systemctl disable V2bX >/dev/null 2>&1 || true; rm -f "$M_UNIT" || restored=false; fi
             systemctl daemon-reload || restored=false
             if [[ $restored == true ]]; then
-                [[ $was_active != true ]] || systemctl start V2bX || restored=false
+                [[ $was_active != true ]] || { systemctl start V2bX && m_health; } || restored=false
             fi
             if [[ $restored == true ]]; then
                 printf '安装 / 更新失败，已恢复原文件和服务状态。\n'
@@ -702,8 +796,17 @@ m_install_core() (
     before_unit=$(m_core_file_hash "$M_UNIT")
     before_payload=$(m_core_tree_hash "$M_BINARY" || printf '无法读取')
     report_ready=true
-    m_line 37 '将检查 V2bX 主程序、GeoIP 和 GeoSite 规则库；已有服务文件保留。'
+    m_line 37 '将检查已签名内核包和本地配置；更新时保留现用 Geo 数据。'
     m_prepare_core "$stage" "${1:-}" || exit 1
+    # Geo datasets are independent. Do not replace custom/current Geo data as
+    # a side effect of a runtime update, including old layouts without metadata.
+    if [[ $existed == true ]]; then
+        for file in "${M_FILES[@]}"; do
+            [[ -f $M_CONFIG/$file && ! -L $M_CONFIG/$file ]] || { m_error '现用 Geo 文件缺失，请先修复。'; exit 1; }
+            cp -p "$M_CONFIG/$file" "$stage/new/$file" || exit 1
+        done
+    fi
+    m_core_preflight "$stage/new/V2bX" || exit 1
     candidate_payload=$(m_core_tree_hash "$stage/new" || printf '无法读取')
     if [[ $existed == true && -f $M_UNIT && $before_payload =~ ^[0-9a-f]{64}$ &&
           $before_payload == "$candidate_payload" && $before_geoip =~ ^[0-9a-f]{64}$ &&
@@ -723,6 +826,7 @@ m_install_core() (
     if [[ -d $M_BINARY ]]; then cp -a "$M_BINARY" "$backup/binary" || exit 1; fi
     systemctl is-active --quiet V2bX && was_active=true
     if [[ $unit_existed != true ]]; then m_write_unit "$stage/V2bX.service" || exit 1; fi
+    jq -n --arg binary_sha "$before_program" --argjson active "$was_active" '{schema:1,binary_sha:$binary_sha,was_active:$active}' > "$backup/core-backup.json" || exit 1
     armed=true
     if [[ $existed == true || $unit_existed == true ]]; then systemctl stop V2bX || exit 1; fi
     if [[ -d $M_BINARY ]]; then mv "$M_BINARY" "$stage/old" || exit 1; fi
@@ -733,6 +837,7 @@ m_install_core() (
         install -m 644 "$stage/V2bX.service" "$M_UNIT" && systemctl daemon-reload && systemctl enable V2bX || exit 1
     fi
     if [[ $was_active == true ]]; then systemctl start V2bX && m_health || exit 1; fi
+    printf '%s\n' "$backup" > "$M_CONFIG/last-core-backup.next" && mv "$M_CONFIG/last-core-backup.next" "$M_CONFIG/last-core-backup" || exit 1
     armed=false
     printf 'V2bX 二进制安装 / 更新完成。备份：%s\n' "$backup"
     if [[ $was_active == true ]]; then core_outcome='已应用发布包，服务已重新启动并通过运行检查。'
@@ -752,6 +857,146 @@ m_install_flow() {
         [[ -f $M_CONFIG/config.json ]] || { printf '尚未配置节点，以后运行 v2bx generate。\n'; return 0; }
         m_offer_socks
     else printf '安装完成，节点尚未配置。以后运行 v2bx generate；完成后可运行 v2bx socks。\n'; fi
+}
+# Use the existing helper job namespace so every node/SOCKS/config operation
+# sees queued core workers, including the gap before the worker acquires flock.
+m_core_job_submit() (
+    local action=$1 target=${2:-} root job unit
+    [[ $action == update || $action == rollback ]] || exit 1
+    if [[ $action == update && -n $target ]]; then
+        [[ $target =~ ^core-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { m_error '版本格式为 core-vX.Y.Z。'; exit 1; }
+    fi
+    umask 077
+    m_need_install && m_lock && m_standard_config || exit 1
+    root="$M_CONFIG/socks-helper-jobs"
+    [[ ! -L $root ]] || exit 1
+    mkdir -p "$root" && chmod 700 "$root" || exit 1
+    job=$(mktemp -d "$root/job-$(date +%Y%m%d-%H%M%S)-XXXXXX") || exit 1
+    unit="v2bx-socks-${job##*/}"
+    cp "$M_SELF" "$job/manager.sh" && cp "$M_HELPER" "$job/helper.sh" || exit 1
+    chmod 600 "$job/manager.sh" "$job/helper.sh" || exit 1
+    jq -n --arg action "$action" --arg target "$target" --arg unit "$unit" \
+        --arg binary_sha "$(m_core_file_hash "$M_BINARY/V2bX")" \
+        --arg config_sha "$(m_core_file_hash "$M_CONFIG/config.json")" \
+        --arg unit_sha "$(m_core_file_hash "$M_UNIT")" \
+        '{action:$action,target:$target,unit:$unit,binary_sha:$binary_sha,config_sha:$config_sha,unit_sha:$unit_sha}' > "$job/job.json" || exit 1
+    if ! systemd-run --quiet --collect --unit="$unit" --property=Type=exec \
+        --property=RuntimeMaxSec=1800 --property=TimeoutStopSec=120 \
+        /bin/bash "$job/manager.sh" __core-worker "$job" > "$job/launch.log" 2>&1; then
+        if ! bash -c 'source "$1"; job_active "$2"' core-launch "$M_HELPER" "$job" && [[ ! -f $job/result.json ]]; then
+            printf '{"status":"failed","exit_code":1}\n' > "$job/result.json"
+            m_error '后台内核任务启动失败，未修改服务。'; exit 1
+        fi
+    fi
+    printf '%s\n' "$job" > "$M_CONFIG/last-core-job.next" && mv "$M_CONFIG/last-core-job.next" "$M_CONFIG/last-core-job" || exit 1
+    exec 8>&-
+    m_line 32 '已交给 systemd 后台处理，SSH 断开不会中止更新。'
+    m_line 37 '查看结果：v2bx core-job；查看版本：v2bx core-versions'
+)
+m_core_job_show() {
+    local job
+    [[ -f $M_CONFIG/last-core-job && ! -L $M_CONFIG/last-core-job ]] || { printf '暂无内核后台任务。\n'; return 0; }
+    IFS= read -r job < "$M_CONFIG/last-core-job" || return 1
+    [[ ${job%/*} == "$M_CONFIG/socks-helper-jobs" && ${job##*/} == job-* && ! -L $job ]] || return 1
+    bash -c 'source "$1"; show_job "$2"' core-show "$M_HELPER" "$job"
+}
+m_core_job_worker() (
+    local job=$1 action target
+    [[ $EUID == 0 && ${job%/*} == "$M_CONFIG/socks-helper-jobs" && ${job##*/} == job-* &&
+       -d $job && ! -L $job && -O $job && $(stat -c %a "$job") == 700 && ! -L $job/job.json ]] || exit 1
+    umask 077
+    exec > "$job/output.log" 2>&1
+    m_core_job_finish() {
+        local code=$?
+        trap - EXIT
+        jq -n --arg status "$([[ $code == 0 ]] && printf succeeded || printf failed)" --argjson code "$code" \
+            '{status:$status,exit_code:$code}' > "$job/result.next" && mv "$job/result.next" "$job/result.json"
+        exit "$code"
+    }
+    trap m_core_job_finish EXIT
+    # Ignore hangups. systemd termination reaches the installer rollback trap.
+    trap '' HUP
+    M_HELPER="$job/helper.sh"
+    [[ ! -L $M_CONFIG/.v2bx-socks.lock ]] || exit 1
+    exec 8>"$M_CONFIG/.v2bx-socks.lock" || exit 1
+    flock -w 30 8 || { m_error '无法取得共享配置锁。'; exit 1; }
+    # Already owns the same lock for the full download/preflight/apply lifecycle.
+    m_lock() { :; }
+    [[ $(m_core_file_hash "$M_CONFIG/config.json") == "$(jq -er '.config_sha' "$job/job.json")" &&
+       $(m_core_file_hash "$M_BINARY/V2bX") == "$(jq -er '.binary_sha' "$job/job.json")" &&
+       $(m_core_file_hash "$M_UNIT") == "$(jq -er '.unit_sha' "$job/job.json")" ]] || {
+        m_error '提交后台任务后配置、程序或服务发生变化，未应用。'; exit 1;
+    }
+    action=$(jq -er '.action' "$job/job.json") && target=$(jq -r '.target' "$job/job.json") || exit 1
+    case $action in update) m_install_core "$target";; rollback) m_core_rollback "$target";; *) exit 1;; esac
+)
+m_core_rollback() (
+    local target=${1:-} expected stage='' armed=false moved=false active=false failed=false
+    umask 077
+    m_need_install && m_lock && m_standard_config || exit 1
+    if [[ -z $target ]]; then
+        [[ -f $M_CONFIG/last-core-backup && ! -L $M_CONFIG/last-core-backup ]] || { m_error '没有可回滚的内核备份。'; exit 1; }
+        IFS= read -r target < "$M_CONFIG/last-core-backup" || exit 1
+    fi
+    [[ ${target%/*} == "$M_CONFIG/manager-backups" && ${target##*/} == core-* && -d $target && ! -L $target &&
+       -f $target/core-backup.json && ! -L $target/core-backup.json && -d $target/binary &&
+       -z $(find "$target/binary" -type l -print -quit) ]] || { m_error '备份路径或结构无效。'; exit 1; }
+    expected=$(jq -er '.binary_sha|select(test("^[0-9a-f]{64}$"))' "$target/core-backup.json") || exit 1
+    [[ $(m_core_file_hash "$target/binary/V2bX") == "$expected" ]] || { m_error '备份二进制摘要不符。'; exit 1; }
+    stage=$(mktemp -d "${M_BINARY%/*}/.v2bx-rollback.XXXXXX") || exit 1
+    m_core_rollback_cleanup() {
+        local code=$?
+        trap - EXIT; trap '' HUP INT TERM
+        if [[ $armed == true ]]; then
+            systemctl stop V2bX || failed=true
+            if [[ $moved == true ]]; then
+                rm -rf "$M_BINARY" || failed=true
+                mv "$stage/current" "$M_BINARY" || failed=true
+            fi
+            if [[ $active == true ]]; then systemctl start V2bX && m_health || failed=true; fi
+            if [[ $failed == true ]]; then printf '恢复失败，保留现场：%s\n' "$stage" >&2; exit 1; fi
+            printf '回滚验证失败，已恢复操作前内核。\n'
+            code=1
+        fi
+        rm -rf "$stage"
+        exit "$code"
+    }
+    trap m_core_rollback_cleanup EXIT
+    trap 'exit 143' TERM HUP
+    trap 'exit 130' INT
+    cp -a "$target/binary" "$stage/new" || exit 1
+    if [[ -f $stage/new/core-manifest.json ]]; then
+        m_core_preflight "$stage/new/V2bX" || exit 1
+    else
+        # Legacy binaries have no offline checker; keep current configuration
+        # and rely on the same service health/automatic recovery transaction.
+        "$stage/new/V2bX" version >/dev/null || exit 1
+    fi
+    [[ $(m_core_file_hash "$M_BINARY/V2bX") != "$expected" ]] || { printf '当前已是备份内核，无需重启。\n'; exit 0; }
+    systemctl is-active --quiet V2bX && active=true
+    armed=true
+    systemctl stop V2bX || exit 1
+    mv "$M_BINARY" "$stage/current" || exit 1
+    moved=true
+    mv "$stage/new" "$M_BINARY" || exit 1
+    if [[ $active == true ]]; then systemctl start V2bX && m_health || exit 1; fi
+    armed=false
+    printf '内核已回滚至 %s；当前节点、SOCKS、Geo 数据和服务启停状态保留。\n' "$(m_core_version "$M_BINARY/V2bX")"
+)
+m_core_menu() {
+    local choice
+    m_need_install || return 1
+    m_core_versions
+    m_choose '内核维护' '请选择 [1-4]' '后台更新到最新已验证内核' '查看上次后台任务结果' '回滚到上次更新前内核' '返回主菜单' || return 0
+    choice=$M_REPLY
+    case $choice in
+        1) m_core_job_submit update;;
+        2) m_core_job_show;;
+        3) m_core_job_submit rollback;;
+        4) return 0;;
+        *) m_error '请输入 1-4。';;
+    esac
+    m_ask '按回车返回菜单' || return 0
 }
 # Incremental guided node management. Derived configuration conventions: MPL-2.0.
 m_node_tag() {
@@ -1229,7 +1474,7 @@ m_menu() {
         m_section '⚙ 安装与维护'
         m_option 11 '安装 V2bX'
         m_option 12 '更新管理工具到最新版（含 SOCKS 助手）'
-        m_option 13 '单独更新 V2bX 内核'
+        m_option 13 '官方内核更新与回滚'
         m_option 14 '查看 V2bX 版本'
         m_option 15 '生成 X25519 密钥'
         m_option 16 '安装 BBR'
@@ -1239,9 +1484,7 @@ m_menu() {
         m_ask '请选择 [1-19]' || return 0; choice=$M_REPLY
         case $choice in
             1) m_edit;; 11) m_install_flow;;
-            13)
-                m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY"
-                m_ask '按回车返回菜单' || return 0;;
+            13) m_core_menu;;
             18) m_uninstall;; 6) m_service start;; 7) m_service stop;; 8) m_service restart;;
             4) systemctl status V2bX --no-pager;; 5) m_logs '返回菜单';;
             9) m_service enable;; 10) m_service disable;; 16) m_bbr;;
@@ -1259,14 +1502,18 @@ m_help() {
       'v2bx config         引导修改、新增或删除节点' \
       'v2bx generate       生成节点配置并可选配置 SOCKS' \
       'v2bx socks          打开 SOCKS 出口助手' \
-      'v2bx update [版本]   仅更新 V2bX 内核' \
+      'v2bx update [core-vX.Y.Z] 后台更新已验证内核' \
+      'v2bx core-versions   查看安装 / 官方 / 已适配内核版本' \
+      'v2bx core-job        查看后台更新或回滚结果' \
+      'v2bx core-rollback   后台回滚到上次更新前的内核' \
       'v2bx update_shell   更新本仓库管理工具与助手' \
       'v2bx start|stop|restart|status|enable|disable|log|config|uninstall|x25519|version' \
       'v2bx --version      查看管理工具版本；v2bx-socks 保持兼容'
 }
 m_main() {
+    if [[ ${1:-} == __core-worker ]]; then m_core_job_worker "${2:-}"; return $?; fi
     case ${1:-} in --help|-h) m_help; return 0;; --version) printf '%s\n' "$MANAGER_VERSION"; return 0;;
-        ''|install|generate|socks|update|update_shell|start|stop|restart|status|enable|disable|log|config|uninstall|x25519|version) ;;
+        ''|install|generate|socks|update|core-versions|core-job|core-rollback|update_shell|start|stop|restart|status|enable|disable|log|config|uninstall|x25519|version) ;;
         *) m_help; return 1;; esac
     [[ $EUID == 0 ]] || { m_error '请使用 root 用户运行。'; return 1; }
     m_platform && m_dependencies || return 1
@@ -1276,7 +1523,8 @@ m_main() {
     case ${1:-} in
         '') m_menu;; install) m_install_flow "${2:-}";;
         generate) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
-        socks) m_socks;; update) m_need_install && m_install_core "${2:-}";;
+        socks) m_socks;; update) m_core_job_submit update "${2:-}";;
+        core-versions) m_core_versions;; core-job) m_core_job_show;; core-rollback) m_core_job_submit rollback;;
         update_shell) m_update_tools;; start|stop|restart|enable|disable) m_service "$1";;
         status) systemctl status V2bX --no-pager;; log) m_logs;;
         config) m_edit;; uninstall) m_uninstall;; x25519|version) m_need_install && "$M_BINARY/V2bX" "$1";;

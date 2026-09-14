@@ -1,4 +1,4 @@
-"""Optional local integration test: run with a V2bX v0.4.0 binary path.
+"""Optional local integration test: run with a integrated V2bX binary path.
 
 Only loopback listeners, disposable fixture accounts and temporary configs are used.
 No panel API or real residential proxy is contacted.
@@ -52,7 +52,7 @@ class Direct(BaseHTTPRequestHandler):
         pass
 
 
-def main(binary):
+def main(binary, core_type="xray"):
     with tempfile.TemporaryDirectory(prefix="v2bx-xray-runtime-") as directory:
         directory = Path(directory)
         socks = socket.socket()
@@ -100,12 +100,15 @@ def main(binary):
 
         proxy_thread = threading.Thread(target=proxy, daemon=True)
         proxy_thread.start()
-        node = {"Core": "xray", "ApiHost": "https://panel.invalid", "NodeType": "vless", "NodeID": 11}
+        node = {"Core": core_type, "ApiHost": "https://panel.invalid", "NodeType": "vless", "NodeID": 11}
         nodes = [node, dict(node, NodeID=12)]
         core = {"Type": "xray", "AssetPath": str(directory), "Log": {"Level": "error"},
                 "OutboundConfigPath": str(directory / "out.json"),
                 "RouteConfigPath": str(directory / "route.json"),
                 "InboundConfigPath": str(directory / "in.json")}
+        if core_type == "sing":
+            core = {"Type":"sing", "OriginalPath":str(directory/"sing.json")}
+            (directory/"sing.json").write_bytes(json_bytes({"outbounds":[{"tag":"direct","type":"direct"},{"tag":"block","type":"block"}],"route":{"rules":[{"protocol":["bittorrent"],"outbound":"block"}],"final":"direct"}}))
         config = {"Log": {"Level": "error"}, "Cores": [core], "Nodes": nodes}
         (directory / "config.json").write_bytes(json_bytes(config))
         (directory / "out.json").write_bytes(json_bytes([
@@ -125,13 +128,20 @@ WORK_DIR=${CONFIG_PATH%/*}
 build_candidate 0 "$4"
 ''', "runtime-test", str(root / "src/helper.sh"), str(task), str(directory / "config.json"),
                         str(directory / "endpoint.json")], check=True)
-        shutil.copyfile(task / "0.after", directory / "out.json")
-        shutil.copyfile(task / "1.after", directory / "route.json")
+        if core_type == "sing":
+            shutil.copyfile(task / "0.after", directory / "sing.json")
+        else:
+            shutil.copyfile(task / "0.after", directory / "out.json")
+            shutil.copyfile(task / "1.after", directory / "route.json")
         ports = [free_port(), free_port()]
         (directory / "in.json").write_bytes(json_bytes([
             {"tag": node_tag(node), "listen": "127.0.0.1", "port": port, "protocol": "socks",
              "settings": {"auth": "noauth", "udp": False}}
             for node, port in zip(nodes, ports)]))
+        if core_type == "sing":
+            origin=json.loads((directory/"sing.json").read_text())
+            origin["inbounds"]=[{"type":"socks","tag":node_tag(node),"listen":"127.0.0.1","listen_port":port} for node,port in zip(nodes,ports)]
+            (directory/"sing.json").write_bytes(json_bytes(origin))
         # Static loopback inbounds reproduce V2bX's generated node tags; no panel is called.
         config["Nodes"] = []
         (directory / "config.json").write_bytes(json_bytes(config))
@@ -160,7 +170,7 @@ build_candidate 0 "$4"
             assert b"SOCKS-NODE" in responses[0], responses[0]
             assert b"DIRECT-NODE" in responses[1], responses[1]
             assert len(evidence) == 1, evidence
-            print("PASS: V2bX v0.4.0 accepted generated Xray config; node 11 used authenticated SOCKS; node 12 stayed direct.")
+            print(f"PASS: integrated V2bX accepted generated {core_type} config; node 11 used authenticated SOCKS; node 12 stayed direct.")
         finally:
             process.terminate()
             try:
@@ -174,4 +184,4 @@ build_candidate 0 "$4"
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2] if len(sys.argv)>2 else "xray")

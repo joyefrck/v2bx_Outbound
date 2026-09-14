@@ -94,7 +94,7 @@ m_menu
             1: ['edit'], 2: ['generate', 'offer-socks'], 3: ['socks'],
             4: ['status'], 5: ['log'], 6: ['start'], 7: ['stop'], 8: ['restart'],
             9: ['enable'], 10: ['disable'], 11: ['install'], 12: ['tools'],
-            13: ['core:fixture-version'], 14: ['binary:version'], 15: ['binary:x25519'],
+            13: ['core-menu'], 14: ['binary:version'], 15: ['binary:x25519'],
             16: ['bbr'], 17: ['ports'], 18: ['uninstall'], 19: [], 0: [],
         }
         body = '''
@@ -108,7 +108,7 @@ systemctl() { echo ACTION:status; }
 journalctl() { echo ACTION:log; }
 m_service() { echo "ACTION:$1"; }
 m_install_flow() { echo ACTION:install; }
-m_install_core() { echo "ACTION:core:$1"; }
+m_core_menu() { echo ACTION:core-menu; }
 m_update_tools() { echo ACTION:tools; return 1; }
 m_bbr() { echo ACTION:bbr; }
 m_open_ports() { echo ACTION:ports; }
@@ -117,7 +117,7 @@ m_menu
 '''
         for number, expected in actions.items():
             with self.subTest(number=number):
-                inputs = str(number) + '\n' + ('fixture-version\n\n' if number == 13 else '') + '19\n'
+                inputs = str(number) + '\n' + '' + '19\n'
                 result = self.run_shell(body, inputs)
                 actual = [line.removeprefix('ACTION:') for line in result.stdout.splitlines()
                           if line.startswith('ACTION:')]
@@ -271,7 +271,7 @@ m_build_config "$M_CONFIG/candidate"
 
     def mock_transaction(self):
         return '''
-m_need_install() { return 0; }; m_lock() { return 0; }; m_standard_config() { return 0; }
+m_need_install() { return 0; }; m_lock() { return 0; }; m_standard_config() { return 0; }; m_core_preflight() { return 0; }
 systemctl() { printf '%s\\n' "$1" >> "$M_CONFIG/calls"; return 0; }
 m_build_config() {
     local f
@@ -327,7 +327,7 @@ exit 0
         for f in ['geoip.dat', 'geosite.dat']:
             (self.cfg / f).write_text('old-' + f)
         return '''
-m_lock() { return 0; }; m_standard_config() { return 0; }
+m_lock() { return 0; }; m_standard_config() { return 0; }; m_core_preflight() { return 0; }
 systemctl() { return 0; }
 m_prepare_core() { mkdir "$1/new"; printf '#!/bin/sh\\necho new\\n' > "$1/new/V2bX"; chmod 755 "$1/new/V2bX"; echo new > "$1/new/geoip.dat"; echo new > "$1/new/geosite.dat"; }
 '''

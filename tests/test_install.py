@@ -90,7 +90,7 @@ install_helper "$3" https://fixture.invalid
     def test_release_artifact_and_checksum_match_source(self):
         data = (ROOT / 'v2bx-socks.sh').read_bytes()
         self.assertEqual(data, (ROOT / 'src/helper.sh').read_bytes())
-        modules = ['common', 'templates', 'config', 'core-install', 'nodes', 'menu']
+        modules = ['common', 'templates', 'config', 'core-release', 'core-install', 'core-jobs', 'nodes', 'menu']
         source = b''.join((ROOT / 'src/manager' / (name + '.sh')).read_bytes() for name in modules)
         self.assertEqual((ROOT / 'v2bx-manager.sh').read_bytes(), source)
         checksums = dict(line.split()[::-1] for line in (ROOT / 'SHA256SUMS').read_text().splitlines())

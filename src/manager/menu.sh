@@ -123,7 +123,7 @@ m_menu() {
         m_section '⚙ 安装与维护'
         m_option 11 '安装 V2bX'
         m_option 12 '更新管理工具到最新版（含 SOCKS 助手）'
-        m_option 13 '单独更新 V2bX 内核'
+        m_option 13 '官方内核更新与回滚'
         m_option 14 '查看 V2bX 版本'
         m_option 15 '生成 X25519 密钥'
         m_option 16 '安装 BBR'
@@ -133,9 +133,7 @@ m_menu() {
         m_ask '请选择 [1-19]' || return 0; choice=$M_REPLY
         case $choice in
             1) m_edit;; 11) m_install_flow;;
-            13)
-                m_ask '指定内核版本（回车为最新）' && m_need_install && m_install_core "$M_REPLY"
-                m_ask '按回车返回菜单' || return 0;;
+            13) m_core_menu;;
             18) m_uninstall;; 6) m_service start;; 7) m_service stop;; 8) m_service restart;;
             4) systemctl status V2bX --no-pager;; 5) m_logs '返回菜单';;
             9) m_service enable;; 10) m_service disable;; 16) m_bbr;;
@@ -153,14 +151,18 @@ m_help() {
       'v2bx config         引导修改、新增或删除节点' \
       'v2bx generate       生成节点配置并可选配置 SOCKS' \
       'v2bx socks          打开 SOCKS 出口助手' \
-      'v2bx update [版本]   仅更新 V2bX 内核' \
+      'v2bx update [core-vX.Y.Z] 后台更新已验证内核' \
+      'v2bx core-versions   查看安装 / 官方 / 已适配内核版本' \
+      'v2bx core-job        查看后台更新或回滚结果' \
+      'v2bx core-rollback   后台回滚到上次更新前的内核' \
       'v2bx update_shell   更新本仓库管理工具与助手' \
       'v2bx start|stop|restart|status|enable|disable|log|config|uninstall|x25519|version' \
       'v2bx --version      查看管理工具版本；v2bx-socks 保持兼容'
 }
 m_main() {
+    if [[ ${1:-} == __core-worker ]]; then m_core_job_worker "${2:-}"; return $?; fi
     case ${1:-} in --help|-h) m_help; return 0;; --version) printf '%s\n' "$MANAGER_VERSION"; return 0;;
-        ''|install|generate|socks|update|update_shell|start|stop|restart|status|enable|disable|log|config|uninstall|x25519|version) ;;
+        ''|install|generate|socks|update|core-versions|core-job|core-rollback|update_shell|start|stop|restart|status|enable|disable|log|config|uninstall|x25519|version) ;;
         *) m_help; return 1;; esac
     [[ $EUID == 0 ]] || { m_error '请使用 root 用户运行。'; return 1; }
     m_platform && m_dependencies || return 1
@@ -170,7 +172,8 @@ m_main() {
     case ${1:-} in
         '') m_menu;; install) m_install_flow "${2:-}";;
         generate) m_generate && [[ -f $M_CONFIG/config.json ]] && m_offer_socks;;
-        socks) m_socks;; update) m_need_install && m_install_core "${2:-}";;
+        socks) m_socks;; update) m_core_job_submit update "${2:-}";;
+        core-versions) m_core_versions;; core-job) m_core_job_show;; core-rollback) m_core_job_submit rollback;;
         update_shell) m_update_tools;; start|stop|restart|enable|disable) m_service "$1";;
         status) systemctl status V2bX --no-pager;; log) m_logs;;
         config) m_edit;; uninstall) m_uninstall;; x25519|version) m_need_install && "$M_BINARY/V2bX" "$1";;

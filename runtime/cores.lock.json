@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "version": "v1.0.0",
+  "tag": "core-v1.0.0",
+  "go": "go1.26.1",
+  "tags": [
+    "sing",
+    "xray",
+    "hysteria2",
+    "with_quic",
+    "with_grpc",
+    "with_utls",
+    "with_wireguard",
+    "with_acme",
+    "with_gvisor"
+  ],
+  "modules": {
+    "xray": {
+      "path": "github.com/xtls/xray-core",
+      "version": "v1.260327.0",
+      "tag": "v26.3.27",
+      "repository": "XTLS/Xray-core",
+      "sum": "h1:g4TzxMwyPrxslZh6uD+FiG3lXKTrnNO+b4ky2OhogHE=",
+      "commit": "d2758a023cd7f4174a5a5fa4ff66e487d4342ba0"
+    },
+    "sing-box": {
+      "path": "github.com/sagernet/sing-box",
+      "version": "v1.14.0",
+      "tag": "v1.14.0",
+      "repository": "SagerNet/sing-box",
+      "sum": "h1:c2x4MxM4ZJ2i11W2UiAeRJULJDSeOAF/W7Wl5F7eORg=",
+      "commit": "0b8995879f29a9b98ee027bc17b75e101445b238"
+    },
+    "hysteria2": {
+      "path": "github.com/apernet/hysteria/core/v2",
+      "version": "v2.12.2",
+      "tag": "app/v2.12.2",
+      "repository": "HyNetworks/hysteria",
+      "sum": "h1:7dqQqVUp//J6q5fDlOW/v/IkCC/ZGXU02NrEOWYh7YU=",
+      "commit": "619a6f856b69fb7ee6a7a379e810e68b84004605"
+    },
+    "hysteria2-extras": {
+      "path": "github.com/apernet/hysteria/extras/v2",
+      "version": "v2.12.2",
+      "tag": "app/v2.12.2",
+      "repository": "HyNetworks/hysteria",
+      "sum": "h1:Z69dokL2grqTUt2KDIvJ+0sfqBtN1d1JIVo+KRj8WDE=",
+      "commit": "619a6f856b69fb7ee6a7a379e810e68b84004605"
+    }
+  },
+  "patch_index_sha256": "0e04543de73152defa9b98718516fafb224b0b28dce06f84257538accf58bd3b",
+  "platforms": [
+    "linux-amd64",
+    "linux-arm64"
+  ],
+  "geo": {
+    "geoip.dat": {
+      "repository": "v2fly/geoip",
+      "tag": "202609050329",
+      "url": "https://github.com/v2fly/geoip/releases/download/202609050329/geoip.dat",
+      "sha256": "1cba1f0982cf62502fa079c66047c3d0c608196da5b3305671e68f60e917a482"
+    },
+    "geosite.dat": {
+      "repository": "v2fly/domain-list-community",
+      "tag": "20260914091725",
+      "url": "https://github.com/v2fly/domain-list-community/releases/download/20260914091725/dlc.dat",
+      "sha256": "4f4df95fee39f8824449f271d773b28eb1f4471aa733d01750209df0dc373091"
+    }
+  }
+}

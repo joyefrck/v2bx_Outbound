@@ -29,11 +29,11 @@ m_prepare_core() {
             self.assertIn(name, result.stdout)
         self.assertIn('已更新', result.stdout)
 
-    def test_same_version_with_new_geo_data_is_still_an_update(self):
+    def test_update_preserves_current_geo_data(self):
         result = self.run_shell(self.fixture(old='v0.4.0')+'m_install_core')
         self.assertIn('v0.4.0 → v0.4.0', result.stdout)
         self.assertIn('V2bX 主程序 · 未变化', result.stdout)
-        self.assertIn('GeoIP IP 规则库（geoip.dat） · 已更新', result.stdout)
+        self.assertIn('GeoIP IP 规则库（geoip.dat） · 未变化', result.stdout)
         self.assertNotIn('无需更新', result.stdout)
         self.assertIn('stop', (self.cfg/'calls').read_text())
 
@@ -47,9 +47,9 @@ m_prepare_core() {
         self.assertNotIn('无需更新', result.stdout)
 
     def test_menu_waits_for_enter_after_showing_details(self):
-        body = self.fixture()+'m_show_status() { :; }; m_menu'
-        result = self.run_shell(body, '13\n\n\n19\n')
-        self.assertIn('内核更新明细（更新前 → 更新后）', result.stdout)
+        body = self.fixture()+'m_show_status() { :; }; m_core_versions() { :; }; m_core_job_submit() { echo fixture-submitted; }; m_menu'
+        result = self.run_shell(body, '13\n1\n\n19\n')
+        self.assertIn('fixture-submitted', result.stdout)
         self.assertEqual(result.stderr.count('按回车返回菜单'), 1)
         self.assertEqual(result.stderr.count('请选择 [1-19]'), 2)
 
@@ -65,13 +65,13 @@ m_prepare_core() {
         self.assertFalse((self.cfg/'manager-backups').exists())
         self.assertFalse((self.cfg/'calls').exists())
 
-    def test_same_payload_but_stale_deployed_geo_data_is_repaired(self):
+    def test_packaged_geo_does_not_overwrite_custom_deployed_data(self):
         body = self.fixture(old='v0.4.0')
         for name in ['geoip.dat', 'geosite.dat']:
             (self.binary/name).write_text('new\n')
         result = self.run_shell(body+'m_install_core')
         self.assertNotIn('无需更新', result.stdout)
-        self.assertEqual((self.cfg/'geoip.dat').read_text(), 'new\n')
+        self.assertEqual((self.cfg/'geoip.dat').read_text(), 'old-geoip.dat')
 
     def test_extra_release_file_change_is_not_skipped(self):
         body = self.fixture(old='v0.4.0')
@@ -84,7 +84,7 @@ m_prepare_core() {
         self.assertIn('发布包文件集合 · 已更新', result.stdout)
 
     def test_rollback_reports_restored_version_instead_of_candidate(self):
-        result = self.run_shell(self.fixture()+'m_health() { return 1; }; m_install_core', check=False)
+        result = self.run_shell(self.fixture()+'''m_health() { [[ $(m_core_version "$M_BINARY/V2bX") == v0.3.0 ]]; }; m_install_core''', check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('v0.3.0 → v0.3.0', result.stdout)
         self.assertNotIn('v0.3.0 → v0.4.0', result.stdout)

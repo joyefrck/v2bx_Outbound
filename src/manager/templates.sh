@@ -100,7 +100,8 @@ EOF
     "servers": [
       {
         "tag": "cf",
-        "address": "1.1.1.1"
+        "type": "udp",
+        "server": "1.1.1.1"
       }
     ],
     "strategy": "$dnsstrategy"
@@ -113,17 +114,13 @@ EOF
         "server": "cf",
         "strategy": "$dnsstrategy"
       }
-    },
-    {
-      "type": "block",
-      "tag": "block"
     }
   ],
   "route": {
     "rules": [
       {
         "ip_is_private": true,
-        "outbound": "block"
+        "action": "reject"
       },
       {
         "domain_regex": [
@@ -150,7 +147,7 @@ EOF
             "(.*.||)(laomoe|jiyou|ssss|lolicp|vv1234|0z|4321q|868123|ksweb|mm126).(com|cloud|fun|cn|gs|xyz|cc)",
             "(flows|miaoko).(pages).(dev)"
         ],
-        "outbound": "block"
+        "action": "reject"
       },
       {
         "outbound": "direct",
