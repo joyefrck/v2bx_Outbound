@@ -55,23 +55,24 @@ class TerminalUiTests(unittest.TestCase):
 
     def test_both_menus_have_consecutive_numbers(self):
         for body, count in (("m_installed() { return 1; }; m_ask() { M_REPLY=19; }; m_menu", 19),
-                            ('source "$1/src/helper.sh"; show_menu', 7)):
+                            ('source "$1/src/helper.sh"; show_menu', 8)):
             code, output = terminal(body, env={'NO_COLOR': '1'})
             self.assertEqual(code, 0)
             numbers = [int(n) for n in re.findall(r'^  (\d+)\. ', output, re.M)]
             self.assertEqual(numbers, list(range(1, count + 1)))
 
     def test_socks_menu_numbers_dispatch_to_the_matching_operation(self):
-        for number, expected in enumerate(('configure', 'probe', 'config', 'status', 'restore', 'update', ''), 1):
+        for number, expected in enumerate(('configure', 'probe', 'config', 'status', 'restore', 'update', 'remove', ''), 1):
             body = '''
 source "$1/src/helper.sh"
 show_menu() { :; }
-ask() { REPLY=$selection; selection=7; }
+ask() { REPLY=$selection; selection=8; }
 configure_menu() { echo ACTION:configure; }
 ask_endpoint() { echo ACTION:probe; }
 show_socks_config() { echo ACTION:config; }
 show_status() { echo ACTION:status; }
 restore_menu() { echo ACTION:restore; }
+remove_menu() { echo ACTION:remove; }
 update_helper() { echo ACTION:update; return 1; }
 selection=%d
 helper_menu

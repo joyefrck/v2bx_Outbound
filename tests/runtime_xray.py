@@ -147,7 +147,7 @@ build_candidate 0 "$4"
         (directory / "config.json").write_bytes(json_bytes(config))
         process = subprocess.Popen([str(Path(binary).resolve()), "server", "-c", str(directory / "config.json"), "--watch=false"],
                                    cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        try:
+        def wait_ready(process):
             deadline = time.monotonic() + 15
             while True:
                 if process.poll() is not None:
@@ -159,6 +159,8 @@ build_candidate 0 "$4"
                     if time.monotonic() > deadline:
                         raise RuntimeError("V2bX did not start")
                     time.sleep(0.1)
+        try:
+            wait_ready(process)
             responses = []
             for port in ports:
                 responses.append(subprocess.check_output([
@@ -171,6 +173,37 @@ build_candidate 0 "$4"
             assert b"DIRECT-NODE" in responses[1], responses[1]
             assert len(evidence) == 1, evidence
             print(f"PASS: integrated V2bX accepted generated {core_type} config; node 11 used authenticated SOCKS; node 12 stayed direct.")
+            process.terminate()
+            process.communicate(timeout=5)
+            socks.close()  # Simulate an expired/unreachable SOCKS endpoint.
+            config["Nodes"] = nodes
+            (directory / "config.json").write_bytes(json_bytes(config))
+            subprocess.run(["bash", "-c", '''
+source "$1"
+TASK_DIR=$2
+CONFIG_PATH=$3
+WORK_DIR=${CONFIG_PATH%/*}
+build_remove_candidate 0
+''', "runtime-remove-test", str(root / "src/helper.sh"), str(task),
+                            str(directory / "config.json")], check=True)
+            if core_type == "sing":
+                shutil.copyfile(task / "0.after", directory / "sing.json")
+            else:
+                shutil.copyfile(task / "0.after", directory / "out.json")
+                shutil.copyfile(task / "1.after", directory / "route.json")
+            config["Nodes"] = []
+            (directory / "config.json").write_bytes(json_bytes(config))
+            process = subprocess.Popen([str(Path(binary).resolve()), "server", "-c", str(directory / "config.json"), "--watch=false"],
+                                       cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            wait_ready(process)
+            for port in ports:
+                response = subprocess.check_output([
+                    "curl", "-q", "--silent", "--show-error", "--fail", "--max-time", "10",
+                    "--noproxy", "", "--proxy", f"socks5h://127.0.0.1:{port}",
+                    f"http://127.0.0.1:{target.server_port}/"])
+                assert b"DIRECT-NODE" in response, response
+            assert len(evidence) == 1, evidence
+            print(f"PASS: removed {core_type} SOCKS exit with endpoint offline; both nodes now use their original direct exit.")
         finally:
             process.terminate()
             try:

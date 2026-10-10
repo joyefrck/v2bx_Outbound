@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.6 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.7 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.6.0
+VERSION=2.7.0
 HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false
@@ -53,7 +53,8 @@ show_menu() {
     ui_option 4 '查看节点与服务状态'
     ui_option 5 '恢复修改前的配置'
     ui_option 6 '检查 / 更新助手'
-    printf '\n'; ui_option 7 '退出 · 下次见'
+    ui_option 7 '删除一个节点的 SOCKS 出口（恢复默认路由）'
+    printf '\n'; ui_option 8 '退出 · 下次见'
 }
 
 hash_file() {
@@ -252,8 +253,8 @@ ask_endpoint() {
     probe_socks "$TASK_DIR/endpoint.json"
 }
 
-build_candidate() {
-    local index=$1 endpoint=$2 ci ref other i
+prepare_candidate() {
+    local index=$1 ci ref other i
     cp "$CONFIG_PATH" "$TASK_DIR/config.before" || return 1
     CONFIG_SHA=$(hash_file "$TASK_DIR/config.before") || return 1
     jq -e --argjson n "$index" '
@@ -299,12 +300,19 @@ build_candidate() {
     else
         jq '{origin:.,out:(.outbounds // []),route:(.route // {})}' "$TASK_DIR/0.before" > "$TASK_DIR/input.json" || return 1
     fi
+}
+build_candidate() {
+    local index=$1 endpoint=$2
+    prepare_candidate "$index" || return 1
     transform_filter > "$TASK_DIR/transform.jq"
     if ! jq --slurpfile endpoint "$endpoint" --slurpfile selection "$TASK_DIR/selection.json" \
         --arg tag "$TAG" -f "$TASK_DIR/transform.jq" "$TASK_DIR/input.json" \
         > "$TASK_DIR/generated.json" 2> "$TASK_DIR/transform-error"; then
         fail '现有路由不适合自动修改：请确认没有复杂分流、负载均衡、重复出站标识或无效 DNS 设置。'; return 1
     fi
+    write_candidate
+}
+write_candidate() {
     if [[ $CORE_KIND == xray ]]; then
         jq '.out' "$TASK_DIR/generated.json" > "$TASK_DIR/0.after" || return 1
         jq '.route' "$TASK_DIR/generated.json" > "$TASK_DIR/1.after" || return 1
@@ -362,6 +370,47 @@ else
  .out += [{tag:$tag,protocol:"socks",settings:{servers:[$server]}}] |
  if $e.udp then . else .out += [{tag:($tag+"-udp"),protocol:"blackhole"}] end
 end
+JQ
+}
+
+build_remove_candidate() {
+    prepare_candidate "$1" || return 1
+    remove_filter > "$TASK_DIR/remove.jq"
+    if ! jq --slurpfile selection "$TASK_DIR/selection.json" --arg tag "$TAG" \
+        -f "$TASK_DIR/remove.jq" "$TASK_DIR/input.json" > "$TASK_DIR/generated.json" \
+        2> "$TASK_DIR/transform-error"; then
+        fail '未找到可删除的助手 SOCKS 配置，或存在共享引用、非标准规则、重复标识及无效默认出口；未修改配置。'
+        return 1
+    fi
+    write_candidate
+}
+remove_filter() {
+cat <<'JQ'
+def require($ok): if $ok then . else error("unsafe removal") end;
+$selection[0] as $s | ($s.kind=="sing") as $sing | $s.tag as $in |
+(if $sing then "outbound" else "outboundTag" end) as $ok |
+(if $sing then "type" else "protocol" end) as $pk |
+(if $sing then {inbound:[$in],action:"route",outbound:$tag}
+ else {type:"field",inboundTag:[$in],network:"tcp,udp",outboundTag:$tag} end) as $node_rule |
+(if $sing then {inbound:[$in],network:"udp",action:"reject"}
+ else {type:"field",inboundTag:[$in],network:"udp",outboundTag:($tag+"-udp")} end) as $udp_rule |
+def managed: .tag==$tag or .tag==($tag+"-udp");
+require((.out|type)=="array" and all(.out[]; type=="object") and (.route|type)=="object") |
+require(([.out[].tag|select(.!=null)]|length)==([.out[].tag|select(.!=null)]|unique|length)) |
+require(all(.out[]; if .tag==$tag then .[$pk]=="socks"
+ elif .tag==($tag+"-udp") then (if $sing then .type=="block" else .protocol=="blackhole" end) else true end)) |
+(.route.rules // []) as $rules |
+require(($rules|type)=="array" and all($rules[]; type=="object")) |
+require(any(.out[]; managed) or any($rules[]; .[$ok]==$tag or .[$ok]==($tag+"-udp"))) |
+require(all($rules[]; if .[$ok]==$tag then .==$node_rule
+ elif .[$ok]==($tag+"-udp") then .==$udp_rule else true end)) |
+require((.route.balancers // [] | length)==0) |
+.out |= map(select(managed|not)) |
+.route.rules=[$rules[] | select(.!=$node_rule and .!=$udp_rule)] |
+require((.out|length)>0 and (.out[0][$pk]!="socks" or (.out[0].tag // "" | startswith("v2bx-socks-") | not))) |
+(if $sing then .origin.outbounds=.out | .origin.route=.route else . end) |
+# Catch final, detour, selectors, nested rules and other references left behind.
+require([.. | strings | select(.==$tag or .==($tag+"-udp"))] | length==0)
 JQ
 }
 
@@ -445,7 +494,7 @@ rollback() {
     TX_ARMED=false
 }
 apply_candidate() {
-    local i
+    local i action=${1:-apply}
     check_drift || { fail '填写期间配置发生变化，请重新进入菜单。'; return 1; }
     tx_prepare || { fail '无法完成备份，未写入节点配置。'; TX_DIR=''; return 1; }
     TX_ARMED=true
@@ -461,7 +510,11 @@ apply_candidate() {
     say "配置已保存，服务已持续运行并有节点监听。备份：$TX_DIR"
     TX_DIR=''
     TX_ARMED=false
-    say '请用客户端连接该节点，确认出口 IP 与 SOCKS 测试一致。'
+    if [[ $action == remove ]]; then
+        say '所选节点的 SOCKS 出口已删除，已恢复原有默认路由（通常为 VPS 直连）。请用客户端验证连接及出口 IP。'
+    else
+        say '请用客户端连接该节点，确认出口 IP 与 SOCKS 测试一致。'
+    fi
 }
 
 backup_list() {
@@ -634,11 +687,30 @@ configure_menu() {
     submit_job apply
 }
 
+remove_menu() {
+    local count index
+    pending_check || return 1
+    count=$(jq -er '.Nodes | if type=="array" then length else error("nodes") end' "$CONFIG_PATH") || return 1
+    [[ $count != 0 ]] || { say '暂无节点。'; return 0; }
+    jq -r '.Nodes|to_entries[]|"\(.key+1). 节点 ID \(.value.NodeID) · \(.value.NodeType) · \(.value.Core)"' "$CONFIG_PATH" || return 1
+    if [[ $count == 1 ]]; then ask '选择要删除 SOCKS 出口的节点序号' 1
+    else ask '选择要删除 SOCKS 出口的节点序号'; fi || return 1
+    [[ $REPLY =~ ^[1-9][0-9]*$ && ${#REPLY} -le 4 ]] || { fail '请输入节点前面的数字序号。'; return 1; }
+    index=$((10#$REPLY-1)); ((index<count)) || return 1
+    build_remove_candidate "$index" || return 1
+    say "即将删除 SOCKS 出口：$(jq -r '.kind+" / 节点 "+(.node.NodeID|tostring)' "$TASK_DIR/selection.json")"
+    say '保留节点本身，清理此节点的助手 SOCKS 出站、路由及 UDP 阻断规则。'
+    say '恢复原有默认路由（通常为 VPS 直连），出口 IP 可能改变；其他节点与自定义分流保留。'
+    say '无需测试已过期 SOCKS；生效时整个 V2bX 服务会短暂重启，失败自动恢复删除前配置。'
+    confirm '确认备份、删除并生效' || { say '已取消，未修改配置。'; return 0; }
+    submit_job remove
+}
+
 # systemd owns the worker, so disconnecting the terminal cannot cancel the transaction.
 prepare_job() {
     local action=$1 root=${CONFIG_PATH%/*}/socks-helper-jobs unit files
     JOB_DIR=''
-    [[ $action == apply || $action == restore ]] || return 1
+    [[ $action == apply || $action == remove || $action == restore ]] || return 1
     [[ ! -L $root ]] || return 1
     mkdir -p "$root" && chmod 700 "$root" || return 1
     JOB_DIR=$(mktemp -d "$root/job-$(date +%Y%m%d-%H%M%S)-XXXXXX") || return 1
@@ -767,6 +839,7 @@ job_worker() {
     action=$(jq -er '.action' "$state") || return 1
     case $action in
         apply) pending_check && healthy 0 && apply_candidate ;;
+        remove) pending_check && apply_candidate remove ;;
         restore)
             TX_DIR=$(jq -er '.transaction' "$state") || return 1
             [[ ${TX_DIR%/*} == "$BACKUP_ROOT" ]] || return 1
@@ -877,13 +950,14 @@ cleanup() {
 }
 help_text() {
     cat <<'HELP'
-V2bX 中文 SOCKS 出口助手 2.3（轻量版）
+V2bX 中文 SOCKS 出口助手 2.7（轻量版）
 安装后使用：v2bx-socks
 只读查看：v2bx-socks --status
 查看 SOCKS 配置：v2bx-socks --show-socks（密码隐藏）
 手动上传脚本后使用：bash v2bx-socks.sh
 依赖：Bash、jq、curl，以及 Linux 自带的 systemd/coreutils 工具。
-菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态、查看 SOCKS 配置、检查 / 更新助手。
+菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态、查看 SOCKS 配置、检查 / 更新助手、删除节点 SOCKS 出口。
+菜单 7 删除所选节点的助手 SOCKS 配置，恢复原有默认路由；不删除节点。
 菜单 6 可检查 GitHub 更新，确认后备份并更新助手，不重启 V2bX。
 确认保存后由独立后台任务应用；SSH 断开后仍继续执行。
 查看最近任务：v2bx-socks --last-job；生效时短暂重启整个 V2bX 服务。
@@ -894,9 +968,9 @@ helper_menu() {
     local choice
     while true; do
         show_menu
-        ask '请选择 [1-7]' 7 || return 1; choice=$REPLY
+        ask '请选择 [1-8]' 8 || return 1; choice=$REPLY
         case $choice in
-            7) return 0;; 1) configure_menu || true;; 2) ask_endpoint || true;;
+            8) return 0;; 7) remove_menu || true;; 1) configure_menu || true;; 2) ask_endpoint || true;;
             5) restore_menu || true;; 4) show_status || true;; 3) show_socks_config || true;;
             6) if update_helper && [[ $RELOAD_HELPER == true ]]; then return 0; fi;;
             *) say '请输入菜单中的数字。';;
