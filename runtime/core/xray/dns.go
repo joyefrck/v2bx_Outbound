@@ -25,8 +25,8 @@ func updateDNSConfig(node *panel.NodeInfo) (err error) {
 	} else if len(node.RawDNS.DNSMap) != 0 {
 		dnsConfig := DNSConfig{
 			Servers: []interface{}{
-				"1.1.1.1",
-				"localhost"},
+				"https+local://1.1.1.1/dns-query",
+				"https+local://8.8.8.8/dns-query"},
 			Tag: "dns_inbound",
 		}
 		for _, value := range node.RawDNS.DNSMap {

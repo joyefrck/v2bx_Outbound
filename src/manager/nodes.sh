@@ -131,18 +131,57 @@ m_node_track() {
         cp "$path" "$N_STAGE/$N_FILE_INDEX.after" || return 1
     else touch "$N_STAGE/$N_FILE_INDEX.absent" || return 1; fi
 }
+m_node_path_available() {
+    local path=$1 tracked
+    [[ ! -e $path && ! -L $path ]] || return 1
+    for tracked in "${N_PATHS[@]}"; do [[ $path != "$tracked" ]] || return 1; done
+}
+m_node_new_core() {
+    local kind=$1 candidate=$2 ref=$1 suffix='' attempt=0 base available
+    local bases=()
+    case $kind in xray) bases=(dns custom_outbound route);; sing) bases=(sing_origin);; esac
+    jq -e --arg kind "$kind" 'all(.Cores[]; .Type==$kind or (if (.Name // "")=="" then .Type else .Name end)!=$kind)' "$N_STAGE/config.json" >/dev/null || {
+        m_error '已有其他内核使用相同名称，未修改配置。'; return 1;
+    }
+    while true; do
+        available=true
+        jq -e --arg ref "$ref" 'all(.Cores[]; (if (.Name // "")=="" then .Type else .Name end)!=$ref)' "$N_STAGE/config.json" >/dev/null || available=false
+        for base in "${bases[@]}"; do m_node_path_available "$M_CONFIG/$base$suffix.json" || available=false; done
+        [[ $available != true ]] || break
+        attempt=$((attempt+1))
+        ref="$kind-dns"; ((attempt==1)) || ref="$ref-$attempt"
+        suffix="-$ref"
+    done
+    { m_core_filter; printf '%s\n' '$kind|core_config($root)'; } > "$candidate/core.jq" || return 1
+    jq -n --arg root "$M_CONFIG" --arg kind "$kind" -f "$candidate/core.jq" |
+        jq --arg ref "$ref" --arg kind "$kind" --arg root "$M_CONFIG" --arg suffix "$suffix" '
+          if $ref!=$kind then .Name=$ref else . end |
+          if $kind=="xray" then
+            .DnsConfigPath=($root+"/dns"+$suffix+".json") |
+            .OutboundConfigPath=($root+"/custom_outbound"+$suffix+".json") |
+            .RouteConfigPath=($root+"/route"+$suffix+".json")
+          elif $kind=="sing" then .OriginalPath=($root+"/sing_origin"+$suffix+".json") else . end
+        ' > "$N_STAGE/new-core.json" || return 1
+    for base in "${bases[@]}"; do
+        m_node_track "$M_CONFIG/$base$suffix.json" || return 1
+        cp "$candidate/$base.json" "$N_STAGE/$N_FILE_INDEX.after" || return 1
+    done
+    m_node_set Core "$ref" || return 1
+    jq --slurpfile core "$N_STAGE/new-core.json" '.Cores+=[$core[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
+        mv "$N_STAGE/config.next" "$N_STAGE/config.json"
+}
 m_add_existing_core() {
-    local candidate="$N_STAGE/new-nodes" kind file count position ref choice total
-    local required=()
+    local candidate="$N_STAGE/new-nodes" kind count position ref choice total hy2_path='' attempt
     mkdir "$candidate" || return 1
     printf '默认复用已有面板配置，也可手动填写；完成后只追加新节点，保留原有节点和出口配置。\n'
     m_collect_nodes "$candidate" "$N_STAGE/config.json" || return 1
+    write_route_templates "$candidate" || return 1
     jq -s . "$candidate/nodes.jsonl" > "$candidate/batch.json" || return 1
     total=$(jq length "$candidate/batch.json") || return 1
     for ((position=0;position<total;position++)); do
         jq --argjson i "$position" '.[$i]' "$candidate/batch.json" > "$N_STAGE/node.after" || return 1
         kind=$(jq -r .Core "$N_STAGE/node.after") || return 1
-        jq --arg kind "$kind" '[.Cores[]|select(.Type==$kind)]' "$N_STAGE/config.json" > "$candidate/matches.json" || return 1
+        jq --arg kind "$kind" '[.Cores[]|select(.Type==$kind)|select($kind!="xray" or ((.DnsConfigPath // "")|type=="string" and length>0))]' "$N_STAGE/config.json" > "$candidate/matches.json" || return 1
         count=$(jq length "$candidate/matches.json") || return 1
         if ((count>0)); then
             choice=0
@@ -156,23 +195,19 @@ m_add_existing_core() {
             ref=$(jq -r --argjson i "$choice" '.[$i]|if (.Name // "")=="" then .Type else .Name end' "$candidate/matches.json") || return 1
             m_node_set Core "$ref" || return 1
         else
-            jq -e --arg ref "$kind" 'all(.Cores[]; (if (.Name // "")=="" then .Type else .Name end)!=$ref)' "$N_STAGE/config.json" >/dev/null || {
-                m_error '已有其他内核使用相同名称，未修改配置。'; return 1;
-            }
-            { m_core_filter; printf '%s\n' '$kind|core_config($root)'; } > "$candidate/core.jq" || return 1
-            jq -n --arg root "$M_CONFIG" --arg kind "$kind" -f "$candidate/core.jq" > "$N_STAGE/new-core.json" || return 1
-            write_route_templates "$candidate" || return 1
-            case $kind in xray) required=(custom_outbound.json route.json);; sing) required=(sing_origin.json);; hysteria2) required=(hy2config.yaml);; esac
-            for file in "${required[@]}"; do
-                if [[ ! -e $M_CONFIG/$file ]]; then
-                    m_node_track "$M_CONFIG/$file" || return 1
-                    cp "$candidate/$file" "$N_STAGE/$N_FILE_INDEX.after" || return 1
-                else
-                    [[ -f $M_CONFIG/$file && ! -L $M_CONFIG/$file ]] || return 1
-                fi
-            done
-            jq --slurpfile core "$N_STAGE/new-core.json" '.Cores+=[$core[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
-                mv "$N_STAGE/config.next" "$N_STAGE/config.json" || return 1
+            m_node_new_core "$kind" "$candidate" || return 1
+        fi
+        if [[ $kind == hysteria2 ]]; then
+            if [[ -z $hy2_path ]]; then
+                hy2_path="$M_CONFIG/hy2config.yaml"; attempt=0
+                while ! m_node_path_available "$hy2_path"; do
+                    attempt=$((attempt+1))
+                    hy2_path="$M_CONFIG/hy2config-dns-$attempt.yaml"
+                done
+                m_node_track "$hy2_path" || return 1
+                cp "$candidate/hy2config.yaml" "$N_STAGE/$N_FILE_INDEX.after" || return 1
+            fi
+            m_node_set Hysteria2ConfigPath "$hy2_path" || return 1
         fi
         jq --slurpfile node "$N_STAGE/node.after" '.Nodes+=[$node[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
             mv "$N_STAGE/config.next" "$N_STAGE/config.json" || return 1

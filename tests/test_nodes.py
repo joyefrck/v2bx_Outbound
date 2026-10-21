@@ -18,7 +18,9 @@ class NodeTests(unittest.TestCase):
         self.route = self.cfg / 'route.json'
         self.origin = self.cfg / 'sing_origin.json'
         if kind == 'xray':
-            self.core.update(OutboundConfigPath=str(self.out), RouteConfigPath=str(self.route))
+            self.core.update(OutboundConfigPath=str(self.out), RouteConfigPath=str(self.route),
+                             DnsConfigPath=str(self.cfg / 'custom-dns.json'))
+            (self.cfg / 'custom-dns.json').write_text('{"servers":["8.8.8.8"]}')
         elif kind == 'sing':
             self.core.update(OriginalPath=str(self.origin))
         nodes = [{'Core': ref, 'ApiHost': 'https://panel.invalid', 'ApiKey': 'fixture-secret', 'NodeID': i+1,
@@ -370,7 +372,8 @@ m_edit
     def test_batch_selects_among_multiple_existing_named_cores(self):
         code = self.setup_nodes(named=True)
         config = json.loads(self.config.read_text())
-        config['Cores'].append({'Type':'xray','Name':'another-core','CustomOption':'also-keep'})
+        config['Cores'].append({'Type':'xray','Name':'another-core','CustomOption':'also-keep',
+                                'DnsConfigPath': self.core['DnsConfigPath']})
         self.config.write_text(json.dumps(config))
         self.run_shell(code+'m_edit', '2\n0\nhttps://new.invalid\nfixture-key\ny\n1\n33\n1\nn\nn\n2\ny\n')
         after = json.loads(self.config.read_text())

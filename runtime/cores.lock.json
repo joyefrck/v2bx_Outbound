@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "v1.0.0",
-  "tag": "core-v1.0.0",
+  "version": "v1.0.1",
+  "tag": "core-v1.0.1",
   "go": "go1.26.1",
   "tags": [
     "sing",

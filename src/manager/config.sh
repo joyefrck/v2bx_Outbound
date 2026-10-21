@@ -89,7 +89,7 @@ m_node() {
          ListenIP:$v[7],SendIP:"0.0.0.0",DeviceOnlineMinTraffic:200,MinReportTraffic:0,
          CertConfig:{CertMode:$v[5],RejectUnknownSni:false,CertDomain:$v[6],CertFile:$v[9],KeyFile:$v[10],
             Email:"v2bx@github.com",Provider:$v[11],DNSEnv:($v[12]|fromjson)}} |
-        if .Core=="xray" then .+{EnableProxyProtocol:false,EnableUot:true,EnableTFO:true,DNSType:"UseIPv4"}
+        if .Core=="xray" then .+{EnableProxyProtocol:false,EnableUot:true,EnableTFO:true,EnableDNS:true,DNSType:"ForceIPv4"}
         elif .Core=="sing" then .+{TCPFastOpen:($v[8]=="true"),SniffEnabled:true}
         else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end |
         ($v[3]|fromjson)[] as $id | .NodeID=$id' >> "$candidate/nodes.jsonl" || return 1
@@ -121,7 +121,7 @@ m_core_filter() {
     cat <<'JQ'
 def core_config($root):
     if .=="xray" then {Type:.,Log:{Level:"error",ErrorPath:($root+"/error.log")},
-      OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
+      DnsConfigPath:($root+"/dns.json"),OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
     elif .=="sing" then {Type:.,Log:{Level:"error",Timestamp:true},
       NTP:{Enable:false,Server:"time.apple.com",ServerPort:0},OriginalPath:($root+"/sing_origin.json")}
     else {Type:.,Log:{Level:"error"}} end;
@@ -158,7 +158,7 @@ m_generate() (
     umask 077
     m_need_install && m_lock && m_standard_config || exit 1
     stage=''; backup=''; armed=false; was_active=false; file=''
-    M_FILES=(config.json custom_outbound.json route.json sing_origin.json hy2config.yaml)
+    M_FILES=(config.json dns.json custom_outbound.json route.json sing_origin.json hy2config.yaml)
     stage=$(mktemp -d "$M_CONFIG/.manager-config.XXXXXX") || exit 1
     m_config_cleanup() {
         local code=$?
@@ -181,7 +181,7 @@ m_generate() (
     m_line 37 '  沿用上游默认拦截规则；原文件及权限会完整备份。'
     m_confirm '继续生成配置？' || exit 2
     m_build_config "$stage" || exit 1
-    for file in config.json custom_outbound.json route.json sing_origin.json; do jq -e . "$stage/$file" >/dev/null || exit 1; done
+    for file in config.json dns.json custom_outbound.json route.json sing_origin.json; do jq -e . "$stage/$file" >/dev/null || exit 1; done
     m_section '保存与应用'
     m_confirm '确认保存配置并重启整个 V2bX 服务？' || exit 2
     [[ ! -L $M_CONFIG/manager-backups ]] || exit 1

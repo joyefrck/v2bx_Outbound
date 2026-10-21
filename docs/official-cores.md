@@ -19,6 +19,8 @@
 
 ## 第一组锁定版本
 
+`core-v1.0.1` 保持下列内核依赖及 Geo 快照版本，调整 Xray 面板 DNS 规则生成时的默认解析器为 Cloudflare / Google DoH，移除系统 DNS 备用项。配套管理工具 3.7.1 更新新装、新增及重新生成节点的 DNS 模板；更新程序不会自动重写已有节点的 DNS 配置。
+
 见 `runtime/cores.lock.json`：Xray v26.3.27（Go 模块 v1.260327.0）、sing-box v1.14.0、
 Hysteria 2 app/v2.12.2（core/extras 模块 v2.12.2），Go 1.26.1。
 这些是此次选择并适配的官方稳定版本，不代表未来一直最新。

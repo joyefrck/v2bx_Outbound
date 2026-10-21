@@ -31,6 +31,18 @@ with tempfile.TemporaryDirectory(prefix='v2bx-config-runtime-') as td:
             finally:
                 proc.terminate();proc.wait(timeout=10)
         assert hashlib.sha256(origin.read_bytes()).digest()==digest,'original config was modified'
-    main.write_text(json.dumps({'Cores':[{'Type':'xray','AssetPath':str(binary.parent),'RouteConfigPath':str(work/'route.json'),'OutboundConfigPath':str(work/'custom_outbound.json')}],'Nodes':[]}))
+    main.write_text(json.dumps({'Cores':[{'Type':'xray','AssetPath':str(binary.parent),'DnsConfigPath':str(work/'dns.json'),'RouteConfigPath':str(work/'route.json'),'OutboundConfigPath':str(work/'custom_outbound.json')}],'Nodes':[]}))
     subprocess.run([str(binary),'check-config','-c',str(main)],cwd=work,check=True)
-print('PASS: modern/legacy sing-box configs start without rewriting files; generated Xray routes pass preflight with packaged Geo data.')
+    with (work/'xray.log').open('w') as log:
+        proc=subprocess.Popen([str(binary),'server','-c',str(main)],cwd=work,stdout=log,stderr=log)
+        try:
+            time.sleep(1)
+            if proc.poll() is not None:raise RuntimeError((work/'xray.log').read_text())
+        finally:
+            proc.terminate();proc.wait(timeout=10)
+    main.write_text(json.dumps({'Cores':[{'Type':'hysteria2'}],'Nodes':[{
+        'Core':'hysteria2','ApiHost':'https://panel.invalid','ApiKey':'fixture',
+        'NodeID':1,'NodeType':'hysteria2','Hysteria2ConfigPath':str(work/'hy2config.yaml'),
+    }]}))
+    subprocess.run([str(binary),'check-config','-c',str(main)],cwd=work,check=True)
+print('PASS: modern/legacy sing-box and generated Xray configs start; Hysteria2 DoH YAML passes native preflight.')

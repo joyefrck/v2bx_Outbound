@@ -1,21 +1,30 @@
 # Derived from wyx2685/V2bX-script initconfig.sh; MPL-2.0. See vendor/v2bx-script.
 write_route_templates() {
     local target=$1 ipv6_support dnsstrategy
-    # 创建 custom_outbound.json 文件
+    cat <<EOF > "${target}/dns.json"
+{
+    "servers": [
+        "https+local://1.1.1.1/dns-query",
+        "https+local://8.8.8.8/dns-query"
+    ],
+    "tag": "dns_inbound"
+}
+EOF
+    [[ $? == 0 ]] || return 1
     cat <<EOF > ${target}/custom_outbound.json
 [
     {
         "tag": "IPv4_out",
         "protocol": "freedom",
         "settings": {
-            "domainStrategy": "UseIPv4v6"
+            "domainStrategy": "ForceIPv4v6"
         }
     },
     {
         "tag": "IPv6_out",
         "protocol": "freedom",
         "settings": {
-            "domainStrategy": "UseIPv6"
+            "domainStrategy": "ForceIPv6"
         }
     },
     {
@@ -26,7 +35,6 @@ write_route_templates() {
 EOF
     [[ $? == 0 ]] || return 1
 
-    # 创建 route.json 文件
     cat <<EOF > ${target}/route.json
 {
     "domainStrategy": "AsIs",
@@ -93,18 +101,21 @@ EOF
     if [ "$ipv6_support" -eq 1 ]; then
         dnsstrategy="prefer_ipv4"
     fi
-    # 创建 sing_origin.json 文件
     cat <<EOF > ${target}/sing_origin.json
 {
   "dns": {
     "servers": [
       {
         "tag": "cf",
-        "type": "udp",
-        "server": "1.1.1.1"
+        "type": "https",
+        "server": "1.1.1.1",
+        "server_port": 443,
+        "path": "/dns-query",
+        "tls": {"enabled": true}
       }
     ],
-    "strategy": "$dnsstrategy"
+    "strategy": "$dnsstrategy",
+    "final": "cf"
   },
   "outbounds": [
     {
@@ -117,6 +128,10 @@ EOF
     }
   ],
   "route": {
+    "default_domain_resolver": {
+      "server": "cf",
+      "strategy": "$dnsstrategy"
+    },
     "rules": [
       {
         "ip_is_private": true,
@@ -166,7 +181,6 @@ EOF
 EOF
     [[ $? == 0 ]] || return 1
 
-    # 创建 hy2config.yaml 文件
     cat <<EOF > ${target}/hy2config.yaml
 quic:
   initStreamReceiveWindow: 8388608
@@ -180,7 +194,10 @@ ignoreClientBandwidth: false
 disableUDP: false
 udpIdleTimeout: 60s
 resolver:
-  type: system
+  type: https
+  https:
+    addr: https://1.1.1.1/dns-query
+    timeout: 5s
 acl:
   inline:
     - direct(geosite:google)

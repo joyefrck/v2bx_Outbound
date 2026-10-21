@@ -275,7 +275,7 @@ m_need_install() { return 0; }; m_lock() { return 0; }; m_standard_config() { re
 systemctl() { printf '%s\\n' "$1" >> "$M_CONFIG/calls"; return 0; }
 m_build_config() {
     local f
-    for f in config.json custom_outbound.json route.json sing_origin.json; do echo '{}' > "$1/$f"; done
+    for f in config.json dns.json custom_outbound.json route.json sing_origin.json; do echo '{}' > "$1/$f"; done
     echo quic: > "$1/hy2config.yaml"
 }
 '''
@@ -289,10 +289,11 @@ m_build_config() {
         self.assertEqual(json.loads(f.read_text()), {'original': True})
         self.assertEqual(f.stat().st_mode & 0o777, 0o640)
         self.assertFalse((self.cfg / 'route.json').exists())
+        self.assertFalse((self.cfg / 'dns.json').exists())
         self.assertEqual(list(self.cfg.glob('.manager-config.*')), [])
 
     def test_configuration_success_backs_up_every_overwritten_file(self):
-        files = ['config.json', 'custom_outbound.json', 'route.json', 'sing_origin.json', 'hy2config.yaml']
+        files = ['config.json', 'dns.json', 'custom_outbound.json', 'route.json', 'sing_origin.json', 'hy2config.yaml']
         for f in files:
             (self.cfg / f).write_text('old:' + f)
         self.run_shell(self.mock_transaction() + 'm_health() { return 0; }; m_generate', 'y\ny\n')
@@ -300,6 +301,16 @@ m_build_config() {
         for f in files:
             self.assertEqual((backup / f).read_text(), 'old:' + f)
             self.assertEqual((self.cfg / f).stat().st_mode & 0o777, 0o600)
+
+    def test_configuration_failure_restores_existing_dns_and_permissions(self):
+        dns = self.cfg / 'dns.json'
+        original = '{"servers":["9.9.9.9"]}'
+        dns.write_text(original)
+        dns.chmod(0o640)
+        r = self.run_shell(self.mock_transaction() + 'm_health() { return 1; }; m_generate', 'y\ny\n', check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(dns.read_text(), original)
+        self.assertEqual(dns.stat().st_mode & 0o777, 0o640)
 
     @unittest.skipUnless(shutil.which('flock'), 'requires Linux flock')
     def test_helper_active_job_blocks_regeneration(self):

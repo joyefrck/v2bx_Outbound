@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.7.0
+MANAGER_VERSION=3.7.1
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -169,21 +169,30 @@ check_ipv6_support() { if ip -6 addr | grep -q 'inet6'; then printf 1; else prin
 # Derived from wyx2685/V2bX-script initconfig.sh; MPL-2.0. See vendor/v2bx-script.
 write_route_templates() {
     local target=$1 ipv6_support dnsstrategy
-    # 创建 custom_outbound.json 文件
+    cat <<EOF > "${target}/dns.json"
+{
+    "servers": [
+        "https+local://1.1.1.1/dns-query",
+        "https+local://8.8.8.8/dns-query"
+    ],
+    "tag": "dns_inbound"
+}
+EOF
+    [[ $? == 0 ]] || return 1
     cat <<EOF > ${target}/custom_outbound.json
 [
     {
         "tag": "IPv4_out",
         "protocol": "freedom",
         "settings": {
-            "domainStrategy": "UseIPv4v6"
+            "domainStrategy": "ForceIPv4v6"
         }
     },
     {
         "tag": "IPv6_out",
         "protocol": "freedom",
         "settings": {
-            "domainStrategy": "UseIPv6"
+            "domainStrategy": "ForceIPv6"
         }
     },
     {
@@ -194,7 +203,6 @@ write_route_templates() {
 EOF
     [[ $? == 0 ]] || return 1
 
-    # 创建 route.json 文件
     cat <<EOF > ${target}/route.json
 {
     "domainStrategy": "AsIs",
@@ -261,18 +269,21 @@ EOF
     if [ "$ipv6_support" -eq 1 ]; then
         dnsstrategy="prefer_ipv4"
     fi
-    # 创建 sing_origin.json 文件
     cat <<EOF > ${target}/sing_origin.json
 {
   "dns": {
     "servers": [
       {
         "tag": "cf",
-        "type": "udp",
-        "server": "1.1.1.1"
+        "type": "https",
+        "server": "1.1.1.1",
+        "server_port": 443,
+        "path": "/dns-query",
+        "tls": {"enabled": true}
       }
     ],
-    "strategy": "$dnsstrategy"
+    "strategy": "$dnsstrategy",
+    "final": "cf"
   },
   "outbounds": [
     {
@@ -285,6 +296,10 @@ EOF
     }
   ],
   "route": {
+    "default_domain_resolver": {
+      "server": "cf",
+      "strategy": "$dnsstrategy"
+    },
     "rules": [
       {
         "ip_is_private": true,
@@ -334,7 +349,6 @@ EOF
 EOF
     [[ $? == 0 ]] || return 1
 
-    # 创建 hy2config.yaml 文件
     cat <<EOF > ${target}/hy2config.yaml
 quic:
   initStreamReceiveWindow: 8388608
@@ -348,7 +362,10 @@ ignoreClientBandwidth: false
 disableUDP: false
 udpIdleTimeout: 60s
 resolver:
-  type: system
+  type: https
+  https:
+    addr: https://1.1.1.1/dns-query
+    timeout: 5s
 acl:
   inline:
     - direct(geosite:google)
@@ -450,7 +467,7 @@ m_node() {
          ListenIP:$v[7],SendIP:"0.0.0.0",DeviceOnlineMinTraffic:200,MinReportTraffic:0,
          CertConfig:{CertMode:$v[5],RejectUnknownSni:false,CertDomain:$v[6],CertFile:$v[9],KeyFile:$v[10],
             Email:"v2bx@github.com",Provider:$v[11],DNSEnv:($v[12]|fromjson)}} |
-        if .Core=="xray" then .+{EnableProxyProtocol:false,EnableUot:true,EnableTFO:true,DNSType:"UseIPv4"}
+        if .Core=="xray" then .+{EnableProxyProtocol:false,EnableUot:true,EnableTFO:true,EnableDNS:true,DNSType:"ForceIPv4"}
         elif .Core=="sing" then .+{TCPFastOpen:($v[8]=="true"),SniffEnabled:true}
         else .+{ListenIP:"",Hysteria2ConfigPath:($v[13]+"/hy2config.yaml")} end |
         ($v[3]|fromjson)[] as $id | .NodeID=$id' >> "$candidate/nodes.jsonl" || return 1
@@ -482,7 +499,7 @@ m_core_filter() {
     cat <<'JQ'
 def core_config($root):
     if .=="xray" then {Type:.,Log:{Level:"error",ErrorPath:($root+"/error.log")},
-      OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
+      DnsConfigPath:($root+"/dns.json"),OutboundConfigPath:($root+"/custom_outbound.json"),RouteConfigPath:($root+"/route.json")}
     elif .=="sing" then {Type:.,Log:{Level:"error",Timestamp:true},
       NTP:{Enable:false,Server:"time.apple.com",ServerPort:0},OriginalPath:($root+"/sing_origin.json")}
     else {Type:.,Log:{Level:"error"}} end;
@@ -519,7 +536,7 @@ m_generate() (
     umask 077
     m_need_install && m_lock && m_standard_config || exit 1
     stage=''; backup=''; armed=false; was_active=false; file=''
-    M_FILES=(config.json custom_outbound.json route.json sing_origin.json hy2config.yaml)
+    M_FILES=(config.json dns.json custom_outbound.json route.json sing_origin.json hy2config.yaml)
     stage=$(mktemp -d "$M_CONFIG/.manager-config.XXXXXX") || exit 1
     m_config_cleanup() {
         local code=$?
@@ -542,7 +559,7 @@ m_generate() (
     m_line 37 '  沿用上游默认拦截规则；原文件及权限会完整备份。'
     m_confirm '继续生成配置？' || exit 2
     m_build_config "$stage" || exit 1
-    for file in config.json custom_outbound.json route.json sing_origin.json; do jq -e . "$stage/$file" >/dev/null || exit 1; done
+    for file in config.json dns.json custom_outbound.json route.json sing_origin.json; do jq -e . "$stage/$file" >/dev/null || exit 1; done
     m_section '保存与应用'
     m_confirm '确认保存配置并重启整个 V2bX 服务？' || exit 2
     [[ ! -L $M_CONFIG/manager-backups ]] || exit 1
@@ -1131,18 +1148,57 @@ m_node_track() {
         cp "$path" "$N_STAGE/$N_FILE_INDEX.after" || return 1
     else touch "$N_STAGE/$N_FILE_INDEX.absent" || return 1; fi
 }
+m_node_path_available() {
+    local path=$1 tracked
+    [[ ! -e $path && ! -L $path ]] || return 1
+    for tracked in "${N_PATHS[@]}"; do [[ $path != "$tracked" ]] || return 1; done
+}
+m_node_new_core() {
+    local kind=$1 candidate=$2 ref=$1 suffix='' attempt=0 base available
+    local bases=()
+    case $kind in xray) bases=(dns custom_outbound route);; sing) bases=(sing_origin);; esac
+    jq -e --arg kind "$kind" 'all(.Cores[]; .Type==$kind or (if (.Name // "")=="" then .Type else .Name end)!=$kind)' "$N_STAGE/config.json" >/dev/null || {
+        m_error '已有其他内核使用相同名称，未修改配置。'; return 1;
+    }
+    while true; do
+        available=true
+        jq -e --arg ref "$ref" 'all(.Cores[]; (if (.Name // "")=="" then .Type else .Name end)!=$ref)' "$N_STAGE/config.json" >/dev/null || available=false
+        for base in "${bases[@]}"; do m_node_path_available "$M_CONFIG/$base$suffix.json" || available=false; done
+        [[ $available != true ]] || break
+        attempt=$((attempt+1))
+        ref="$kind-dns"; ((attempt==1)) || ref="$ref-$attempt"
+        suffix="-$ref"
+    done
+    { m_core_filter; printf '%s\n' '$kind|core_config($root)'; } > "$candidate/core.jq" || return 1
+    jq -n --arg root "$M_CONFIG" --arg kind "$kind" -f "$candidate/core.jq" |
+        jq --arg ref "$ref" --arg kind "$kind" --arg root "$M_CONFIG" --arg suffix "$suffix" '
+          if $ref!=$kind then .Name=$ref else . end |
+          if $kind=="xray" then
+            .DnsConfigPath=($root+"/dns"+$suffix+".json") |
+            .OutboundConfigPath=($root+"/custom_outbound"+$suffix+".json") |
+            .RouteConfigPath=($root+"/route"+$suffix+".json")
+          elif $kind=="sing" then .OriginalPath=($root+"/sing_origin"+$suffix+".json") else . end
+        ' > "$N_STAGE/new-core.json" || return 1
+    for base in "${bases[@]}"; do
+        m_node_track "$M_CONFIG/$base$suffix.json" || return 1
+        cp "$candidate/$base.json" "$N_STAGE/$N_FILE_INDEX.after" || return 1
+    done
+    m_node_set Core "$ref" || return 1
+    jq --slurpfile core "$N_STAGE/new-core.json" '.Cores+=[$core[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
+        mv "$N_STAGE/config.next" "$N_STAGE/config.json"
+}
 m_add_existing_core() {
-    local candidate="$N_STAGE/new-nodes" kind file count position ref choice total
-    local required=()
+    local candidate="$N_STAGE/new-nodes" kind count position ref choice total hy2_path='' attempt
     mkdir "$candidate" || return 1
     printf '默认复用已有面板配置，也可手动填写；完成后只追加新节点，保留原有节点和出口配置。\n'
     m_collect_nodes "$candidate" "$N_STAGE/config.json" || return 1
+    write_route_templates "$candidate" || return 1
     jq -s . "$candidate/nodes.jsonl" > "$candidate/batch.json" || return 1
     total=$(jq length "$candidate/batch.json") || return 1
     for ((position=0;position<total;position++)); do
         jq --argjson i "$position" '.[$i]' "$candidate/batch.json" > "$N_STAGE/node.after" || return 1
         kind=$(jq -r .Core "$N_STAGE/node.after") || return 1
-        jq --arg kind "$kind" '[.Cores[]|select(.Type==$kind)]' "$N_STAGE/config.json" > "$candidate/matches.json" || return 1
+        jq --arg kind "$kind" '[.Cores[]|select(.Type==$kind)|select($kind!="xray" or ((.DnsConfigPath // "")|type=="string" and length>0))]' "$N_STAGE/config.json" > "$candidate/matches.json" || return 1
         count=$(jq length "$candidate/matches.json") || return 1
         if ((count>0)); then
             choice=0
@@ -1156,23 +1212,19 @@ m_add_existing_core() {
             ref=$(jq -r --argjson i "$choice" '.[$i]|if (.Name // "")=="" then .Type else .Name end' "$candidate/matches.json") || return 1
             m_node_set Core "$ref" || return 1
         else
-            jq -e --arg ref "$kind" 'all(.Cores[]; (if (.Name // "")=="" then .Type else .Name end)!=$ref)' "$N_STAGE/config.json" >/dev/null || {
-                m_error '已有其他内核使用相同名称，未修改配置。'; return 1;
-            }
-            { m_core_filter; printf '%s\n' '$kind|core_config($root)'; } > "$candidate/core.jq" || return 1
-            jq -n --arg root "$M_CONFIG" --arg kind "$kind" -f "$candidate/core.jq" > "$N_STAGE/new-core.json" || return 1
-            write_route_templates "$candidate" || return 1
-            case $kind in xray) required=(custom_outbound.json route.json);; sing) required=(sing_origin.json);; hysteria2) required=(hy2config.yaml);; esac
-            for file in "${required[@]}"; do
-                if [[ ! -e $M_CONFIG/$file ]]; then
-                    m_node_track "$M_CONFIG/$file" || return 1
-                    cp "$candidate/$file" "$N_STAGE/$N_FILE_INDEX.after" || return 1
-                else
-                    [[ -f $M_CONFIG/$file && ! -L $M_CONFIG/$file ]] || return 1
-                fi
-            done
-            jq --slurpfile core "$N_STAGE/new-core.json" '.Cores+=[$core[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
-                mv "$N_STAGE/config.next" "$N_STAGE/config.json" || return 1
+            m_node_new_core "$kind" "$candidate" || return 1
+        fi
+        if [[ $kind == hysteria2 ]]; then
+            if [[ -z $hy2_path ]]; then
+                hy2_path="$M_CONFIG/hy2config.yaml"; attempt=0
+                while ! m_node_path_available "$hy2_path"; do
+                    attempt=$((attempt+1))
+                    hy2_path="$M_CONFIG/hy2config-dns-$attempt.yaml"
+                done
+                m_node_track "$hy2_path" || return 1
+                cp "$candidate/hy2config.yaml" "$N_STAGE/$N_FILE_INDEX.after" || return 1
+            fi
+            m_node_set Hysteria2ConfigPath "$hy2_path" || return 1
         fi
         jq --slurpfile node "$N_STAGE/node.after" '.Nodes+=[$node[0]]' "$N_STAGE/config.json" > "$N_STAGE/config.next" &&
             mv "$N_STAGE/config.next" "$N_STAGE/config.json" || return 1
