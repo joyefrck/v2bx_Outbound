@@ -1,6 +1,11 @@
 # Derived from wyx2685/V2bX-script initconfig.sh; MPL-2.0. See vendor/v2bx-script.
 write_route_templates() {
-    local target=$1 ipv6_support dnsstrategy
+    local target=$1 ipv6_support dnsstrategy geoip_path geosite_path
+    # Candidates are temporary; HY2 must read the same installed Geo assets as
+    # the other cores, not auto-download another database in its working dir.
+    # JSON strings are also valid YAML strings, including escaped path names.
+    geoip_path=$(jq -cn --arg root "${M_CONFIG:-$target}" '$root + "/geoip.dat"') || return 1
+    geosite_path=$(jq -cn --arg root "${M_CONFIG:-$target}" '$root + "/geosite.dat"') || return 1
     cat <<EOF > "${target}/dns.json"
 {
     "servers": [
@@ -199,6 +204,8 @@ resolver:
     addr: https://1.1.1.1/dns-query
     timeout: 5s
 acl:
+  geoip: $geoip_path
+  geosite: $geosite_path
   inline:
     - direct(geosite:google)
     - reject(geosite:cn)

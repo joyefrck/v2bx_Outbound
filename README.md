@@ -147,6 +147,10 @@ bash install-v2bx.sh --helper-only
 
 更新管理工具不会自动迁移已有节点，也不会修改服务器 `/etc/resolv.conf`。已有内核明确指定的自定义 DNS 配置继续保留；面板显式下发的 DNS 规则仍由面板控制。新默认值负责节点的目标域名解析，不能代替客户端 DNS 接管，也不保证其他系统程序或远端 SOCKS 服务器的 DNS 行为。
 
+管理工具 3.7.2 起，新装、重新生成及新增的独立 Hysteria2 节点在 YAML 中明确指定 `acl.geoip` 和 `acl.geosite`，引用正式配置目录（默认 `/etc/V2bX`）中的 `geoip.dat`、`geosite.dat`。候选配置不会引用随后删除的临时目录，也不再因服务工作目录不同而自动下载另一套规则库；原有通用 ACL 和规则顺序保持不变，不增加网站白名单。
+
+已有 HY2 节点的 YAML（包括自定义路径）不会因工具更新或新增节点被覆盖。需要修复已有节点时，在其 `Hysteria2ConfigPath` 对应 YAML 的 `acl` 下补上这两个数据库的绝对路径，确认文件存在，运行 `/usr/local/V2bX/V2bX check-config -c /etc/V2bX/config.json` 检查后重启服务，并用客户端实际连接验证。显式路径关闭 Hysteria 的自动下载，后续需维护正式目录中的规则库；菜单 13 更新内核会保留现用 Geo 数据，不会替换它们。无需重新生成整套节点配置或重置 SOCKS 出口。
+
 统一向导沿用上游默认拦截规则，支持 Xray、sing-box 和独立 Hysteria2；SOCKS 仍限 Xray / sing-box。
 TLS 可选择 HTTP/DNS 自动申请、已有证书或自签证书。DNS 参数和面板密钥不显示原文。
 暂不支持 Alpine/OpenRC、普通 Docker 安装、非标准服务布局。断电或强杀进程时应根据保留的备份检查恢复。

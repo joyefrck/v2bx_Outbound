@@ -58,6 +58,7 @@ jobs:
           python3 tests/runtime_xray.py "$RUNNER_TEMP/core-dist/V2bX"
           python3 tests/runtime_xray.py "$RUNNER_TEMP/core-dist/V2bX" sing
           python3 tests/runtime_config.py "$RUNNER_TEMP/core-dist/V2bX"
+          python3 tests/runtime_hy2_geo.py "$RUNNER_TEMP/core-dist/V2bX"
       - name: Verify detached core transactions with systemd
         run: sudo env V2BX_SYSTEMD_TEST=1 python3 -m unittest discover -s tests -p test_core_jobs.py -v
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
