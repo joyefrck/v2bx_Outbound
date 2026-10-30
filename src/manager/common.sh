@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.8.0
+MANAGER_VERSION=3.8.1
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -128,14 +128,8 @@ m_health() {
     bash -c '
         source "$1"
         discover || exit 1
-        initial=$(service_state | property NRestarts) || exit 1
-        for ((i=0;i<30;i++)); do
-            state=$(service_state) || exit 1
-            [[ $(printf "%s\n" "$state" | property NRestarts) == "$initial" ]] || exit 1
-            [[ $(printf "%s\n" "$state" | property SubState) != auto-restart ]] || exit 1
-            if healthy 0; then healthy 5; exit $?; fi
-            sleep 1
-        done
+        wait_service_ready 5 30 && exit 0
+        printf "健康检查未通过：%s\n" "$HEALTH_ERROR" >&2
         exit 1
     ' manager-health "$M_HELPER"
 }

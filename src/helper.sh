@@ -2,7 +2,7 @@
 # V2bX SOCKS Helper 2.8 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.8.0
+VERSION=2.8.1
 HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false
@@ -137,6 +137,30 @@ diagnosis() {
         say '请运行 v2bx status / v2bx log 检查服务及面板节点信息。'
     fi
 }
+node_material_ready() {
+    local requirements network path
+    requirements=$(jq -r '
+      [.Nodes[]?] as $nodes |
+      (if ($nodes|length)>0 and all($nodes[]; ((.NodeType // "")|ascii_downcase)=="hysteria2")
+       then "udp" else "any" end),
+      ($nodes[] | .CertConfig // {} |
+       select(.CertMode=="http" or .CertMode=="dns" or .CertMode=="self" or .CertMode=="file") |
+       ((.CertFile // ""), (.KeyFile // "")) |
+       if type=="string" and length>0 and (test("[\\r\\n]")|not) then . else error("invalid certificate path") end)
+    ' "$CONFIG_PATH" 2>/dev/null) || { HEALTH_ERROR='无法读取节点就绪条件。'; return 1; }
+    {
+        IFS= read -r network
+        while IFS= read -r path; do
+            [[ -n $path ]] || { HEALTH_ERROR='节点证书或私钥路径未设置。'; return 1; }
+            [[ $path == /* ]] || path="$WORK_DIR/$path"
+            [[ -s $path ]] || { HEALTH_ERROR='节点证书或私钥尚未就绪，正在等待证书申请完成。'; return 1; }
+        done
+    } <<< "$requirements"
+    # ACME temporarily opens TCP 80 before HY2 opens its real UDP listener.
+    if [[ $network == udp ]] && ! grep -Eq "^udp[[:space:]].*pid=$1," <<< "$2"; then
+        HEALTH_ERROR='HY2 节点的 UDP 监听尚未就绪。'; return 1
+    fi
+}
 healthy() {
     local seconds=${1:-5} state pid identity='' current i listeners
     HEALTH_ERROR=''
@@ -154,22 +178,54 @@ healthy() {
         # causing ss to fail with SIGPIPE under pipefail on busy/multi-node hosts.
         listeners=$(ss -H -lntup 2>/dev/null) || { HEALTH_ERROR='无法读取监听端口（ss 执行失败）。'; return 1; }
         grep -Eq "pid=$pid," <<< "$listeners" || { HEALTH_ERROR="没有找到 V2bX 主进程（PID ${pid}）的 TCP/UDP 监听端口。"; return 1; }
+        node_material_ready "$pid" "$listeners" || return 1
         (( i == seconds )) || sleep 1
     done
 }
 service_stop() { systemctl stop V2bX.service >/dev/null 2>&1; }
-service_start_check() {
-    local initial state i
-    systemctl start V2bX.service >/dev/null 2>&1 || return 1
+wait_service_ready() {
+    local observe=${1:-5} budget=${2:-30} initial state i pid identity='' current deadline
+    # First-time ACME issuance can exceed the normal startup window.
+    if jq -e 'any(.Nodes[]?; .CertConfig.CertMode=="http" or .CertConfig.CertMode=="dns")' "$CONFIG_PATH" >/dev/null 2>&1; then
+        budget=180
+    fi
+    deadline=$((SECONDS+budget))
     initial=$(service_state | property NRestarts) || return 1
-    for ((i=0; i<35; i++)); do
+    for ((i=0; i<budget && SECONDS<deadline; i++)); do
         state=$(service_state) || return 1
-        [[ $(printf '%s\n' "$state" | property NRestarts) == "$initial" ]] || return 1
-        [[ $(printf '%s\n' "$state" | property SubState) != auto-restart ]] || return 1
-        if healthy 0; then healthy 15; return $?; fi
+        [[ $(printf '%s\n' "$state" | property NRestarts) == "$initial" &&
+           $(printf '%s\n' "$state" | property SubState) != auto-restart &&
+           $(printf '%s\n' "$state" | property ActiveState) != failed ]] || {
+            HEALTH_ERROR='等待节点就绪期间服务失败或发生重启。'; return 1;
+        }
+        pid=$(printf '%s\n' "$state" | property MainPID)
+        if [[ $pid =~ ^[1-9][0-9]*$ ]]; then
+            current="$pid:$(printf '%s\n' "$state" | property ExecMainStartTimestampMonotonic)"
+            [[ -z $identity || $identity == "$current" ]] || { HEALTH_ERROR='等待节点就绪期间主进程发生变化。'; return 1; }
+            identity=$current
+        elif [[ -n $identity ]]; then
+            HEALTH_ERROR='等待节点就绪期间主进程退出。'; return 1
+        fi
+        # Listener handoffs in the same process can interrupt observation.
+        # Retry readiness, but keep enforcing restart/PID checks and the deadline.
+        if healthy 0 && healthy "$observe"; then
+            state=$(service_state) || return 1
+            current="$(printf '%s\n' "$state" | property MainPID):$(printf '%s\n' "$state" | property ExecMainStartTimestampMonotonic)"
+            [[ ( -z $identity || $identity == "$current" ) &&
+               $(printf '%s\n' "$state" | property NRestarts) == "$initial" &&
+               $(printf '%s\n' "$state" | property ActiveState) == active &&
+               $(printf '%s\n' "$state" | property SubState) == running ]] || {
+                HEALTH_ERROR='节点观察前后服务状态或主进程发生变化。'; return 1;
+            }
+            return 0
+        fi
         sleep 1
     done
     return 1
+}
+service_start_check() {
+    systemctl start V2bX.service >/dev/null 2>&1 || return 1
+    wait_service_ready 15 35
 }
 
 validate_endpoint() {

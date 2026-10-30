@@ -96,6 +96,10 @@ class Fixture(unittest.TestCase):
 
 
 class HealthTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.setup_config()
+
     state = '''
 service_state() { printf 'ActiveState=active\\nSubState=running\\nMainPID=1234\\nNRestarts=0\\n'; }
 '''

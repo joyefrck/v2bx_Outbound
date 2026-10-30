@@ -41,6 +41,7 @@ m_health
         self.assertIn('ExecMainStartTimestampMonotonic=100', result.stdout)
 
     def test_timestamp_change_detects_restart_without_counter(self):
+        self.setup_config()
         result = self.shell(self.legacy + r'''
 sleep() { START_TIME=200; }
 healthy 1 && exit 99
