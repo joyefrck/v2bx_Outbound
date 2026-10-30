@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# V2bX SOCKS Helper 2.7 - Bash + jq + curl. No Python runtime required.
+# V2bX SOCKS Helper 2.8 - Bash + jq + curl. No Python runtime required.
 set -uo pipefail
 
-VERSION=2.7.0
+VERSION=2.8.0
 HEALTH_ERROR=''
 TASK_DIR='' TX_DIR='' ATOMIC_TMP=''
 TX_ARMED=false
 CONFIG_PATH='' WORK_DIR='' BACKUP_ROOT=''
 FILES=()
 SELF_PATH='' RELOAD_HELPER=false
+V2BX_BINARY=/usr/local/V2bX/V2bX
 JOB_DIR='' BACKGROUND_SUBMITTED=false
 
 ui_paint() {
@@ -70,6 +71,7 @@ hash_text() {
 }
 metadata() { stat -c '%a %u %g' "$1" 2>/dev/null || stat -f '%Lp %u %g' "$1"; }
 safe_path() { [[ $1 == /* && $1 != *'/../'* && $1 != */.. && $1 =~ ^/[A-Za-z0-9_./+-]+$ && ! -L $1 && -f $1 ]]; }
+safe_target() { [[ $1 == /* && $1 != *'/../'* && $1 != */.. && $1 =~ ^/[A-Za-z0-9_./+-]+$ && ! -L $1 && ( ! -e $1 || -f $1 ) && -d ${1%/*} ]]; }
 valid_json() { jq -e -s 'length == 1' "$1" >/dev/null 2>&1; }
 flush_file() {
     # GNU sync accepts a file; other platforms are used only for development tests.
@@ -109,6 +111,7 @@ discover() {
     cmd=${cmd#*argv\[\]=}; cmd=${cmd%% ;*}
     read -r -a args <<< "$cmd"
     [[ ${#args[@]} -ge 2 && ${args[0]##*/} == V2bX && ${args[1]} == server ]] || { fail '服务未使用标准 V2bX 启动方式。'; return 1; }
+    V2BX_BINARY=${args[0]}
     while (( i < ${#args[@]} )); do
         arg=${args[$i]}
         case $arg in
@@ -253,8 +256,109 @@ ask_endpoint() {
     probe_socks "$TASK_DIR/endpoint.json"
 }
 
+hy2_read_json() {
+    "$V2BX_BINARY" hy2-config-json -c "$1" 2>/dev/null
+}
+
+# HY2 uses a node-local config instead of inbound-tag routing. Keep the shared
+# source untouched and store enough private state to verify/undo our changes.
+hy2_filter() {
+cat <<'JQ'
+def require($ok): if $ok then . else error("unsafe HY2 configuration") end;
+def managed($original; $e; $tag):
+  $original |
+  require(type=="object" and (has("v2bxSocksHelper")|not)) |
+  require((.acl // {} | type)=="object" and (.acl.file // "")=="") |
+  require((.acl.inline // [] | type)=="array") |
+  require(all((.acl.inline // [])[]; type=="string" and test("^(direct|reject)\\([^\\r\\n]+\\)$"))) |
+  require((.outbounds // [] | type)=="array" and all((.outbounds // [])[]; .type=="direct" and .name!=$tag)) |
+  .disableUDP=($e.udp|not) |
+  .outbounds=([{name:$tag,type:"socks5",socks5:({addr:
+    ((if ($e.host|contains(":")) then "["+$e.host+"]" else $e.host end)+":"+($e.port|tostring))} +
+    (if $e.username=="" then {} else {username:$e.username,password:$e.password} end))}] + (.outbounds // [])) |
+  .acl.inline=([(.acl.inline // [])[] |
+    if startswith("direct(") then $tag+"("+ltrimstr("direct(") else . end] + [$tag+"(all)"]) |
+  .v2bxSocksHelper={schema:1,tag:$tag,original:$original,endpoint:$e};
+. as $current |
+(if has("v2bxSocksHelper") then
+  .v2bxSocksHelper as $m |
+  require($m.schema==1 and $m.tag==$tag and ($m.endpoint|type)=="object") |
+  require($current==managed($m.original;$m.endpoint;$tag)) | $m.original
+else require($action!="remove") | . end) as $original |
+if $action=="remove" then $original elif $action=="view" then $current else managed($original;$endpoint[0];$tag) end
+JQ
+}
+
+hy2_prepare_candidate() {
+    local action=$1 endpoint=${2:-} source target other
+    source=$(jq -r '.node.Hysteria2ConfigPath // ""' "$TASK_DIR/selection.json") || return 1
+    [[ -n $source ]] || { fail 'HY2 节点未设置 Hysteria2ConfigPath。'; return 1; }
+    [[ $source == /* ]] || source="$WORK_DIR/$source"
+    safe_path "$source" || { fail 'HY2 配置不是普通文件或路径不受支持。'; return 1; }
+    cp "$source" "$TASK_DIR/hy2-source.before" || return 1
+    if ! hy2_read_json "$TASK_DIR/hy2-source.before" > "$TASK_DIR/hy2-input.json"; then
+        fail '无法读取 HY2 配置：需要带 hy2-config-json 命令的配套新版内核，且配置须为有效的单文档 YAML/JSON。'; return 1
+    fi
+    target="${CONFIG_PATH%/*}/hy2-node-${TAG}.json"
+    [[ $source == "$target" || ( ! -e $target && ! -L $target ) ]] || {
+        fail 'HY2 独立配置目标已存在，未覆盖。'; return 1;
+    }
+    [[ $source == "$target" || $action != remove ]] || { fail '此节点没有助手管理的 HY2 SOCKS 出口。'; return 1; }
+    # A managed file must belong exclusively to this node.
+    if ! jq -e --arg source "$target" --arg work "$WORK_DIR" --argjson i "$HY2_NODE_INDEX" '
+      all(.Nodes|to_entries[]; .key==$i or
+        ((.value.Hysteria2ConfigPath // "") as $p |
+         (if ($p|startswith("/")) then $p else $work+"/"+$p end)!=$source))
+    ' "$TASK_DIR/config.before" >/dev/null; then
+        fail '多个节点共用此 HY2 独立配置，不能安全修改。'; return 1
+    fi
+    while IFS= read -r other; do
+        [[ $other == /* ]] || other="$WORK_DIR/$other"
+        [[ ! -e $target || ! $other -ef $target ]] || {
+            fail '其他节点通过别名共用此 HY2 独立配置，未修改。'; return 1;
+        }
+    done < <(jq -r --argjson i "$HY2_NODE_INDEX" '.Nodes|to_entries[]|select(.key!=$i)|.value.Hysteria2ConfigPath // empty' "$TASK_DIR/config.before")
+    FILES=("$CONFIG_PATH" "$target")
+    cp "$TASK_DIR/config.before" "$TASK_DIR/0.before" || return 1
+    if [[ -e $target ]]; then
+        safe_path "$target" && cp "$target" "$TASK_DIR/1.before" || return 1
+    else
+        : > "$TASK_DIR/1.before"; : > "$TASK_DIR/1.absent"
+    fi
+    jq -n --arg path "$source" --arg sha "$(hash_file "$TASK_DIR/hy2-source.before")" '{path:$path,sha:$sha}' > "$TASK_DIR/hy2-source.json" || return 1
+    hy2_filter > "$TASK_DIR/hy2-transform.jq"
+    [[ -n $endpoint ]] || { printf '[]\n' > "$TASK_DIR/hy2-empty-endpoint.json"; endpoint="$TASK_DIR/hy2-empty-endpoint.json"; }
+    if ! jq --slurpfile endpoint "$endpoint" --arg tag "$TAG" --arg action "$action" \
+        -f "$TASK_DIR/hy2-transform.jq" "$TASK_DIR/hy2-input.json" > "$TASK_DIR/1.after" 2>/dev/null; then
+        fail 'HY2 配置不适合自动修改：外部 ACL、自定义代理出站或已被人工修改的助手规则须先手动处理。'; return 1
+    fi
+    jq --argjson i "$HY2_NODE_INDEX" --arg path "$target" '.Nodes[$i].Hysteria2ConfigPath=$path' \
+        "$TASK_DIR/config.before" > "$TASK_DIR/0.after"
+}
+
+hy2_show_socks() {
+    local path tag=$2
+    path=$1
+    [[ -n $path ]] || { say '  无法读取：HY2 节点没有配置文件路径。'; return 0; }
+    [[ $path == /* ]] || path="$WORK_DIR/$path"
+    if ! safe_path "$path" || ! hy2_read_json "$path" |
+      jq --arg tag "$tag" --arg action view --slurpfile endpoint /dev/null "$(hy2_filter)" 2>/dev/null |
+      jq -r --arg tag "$tag" '
+      def text: tostring|gsub("[\\x00-\\x1f\\x7f]";" ");
+      if .v2bxSocksHelper.tag!=$tag then "  未找到本助手为此节点配置的 SOCKS 出口。"
+      else .v2bxSocksHelper.endpoint as $e |
+        "  SOCKS 地址：\($e.host|text)", "  端口：\($e.port|text)",
+        (if $e.username=="" then "  认证：无账号 / IP 白名单" else
+          "  用户名：\($e.username|text)", "  密码：******（已设置）" end),
+        (if .disableUDP then "  UDP：阻断" else "  UDP：允许（尚未验证 SOCKS 的 UDP 可用性）" end)
+      end' 2>/dev/null; then
+        say '  无法读取 HY2 配置；请检查文件及内核是否支持 hy2-config-json。'
+    fi
+}
+
 prepare_candidate() {
     local index=$1 ci ref other i
+    rm -f "$TASK_DIR/0.absent" "$TASK_DIR/1.absent" "$TASK_DIR/hy2-source.json"
     cp "$CONFIG_PATH" "$TASK_DIR/config.before" || return 1
     CONFIG_SHA=$(hash_file "$TASK_DIR/config.before") || return 1
     jq -e --argjson n "$index" '
@@ -268,12 +372,17 @@ prepare_candidate() {
     CORE_KIND=$(jq -r '.kind' "$TASK_DIR/selection.json")
     ci=$(jq -r '.index' "$TASK_DIR/selection.json")
     NODE_TAG=$(jq -r '.tag' "$TASK_DIR/selection.json")
-    [[ $CORE_KIND == xray || $CORE_KIND == sing ]] || { fail '仅支持 Xray / sing-box 内核。'; return 1; }
+    [[ $CORE_KIND == xray || $CORE_KIND == sing || $CORE_KIND == hysteria2 ]] || { fail '助手暂未适配此内核。'; return 1; }
     jq -e --slurpfile s "$TASK_DIR/selection.json" '
       [.Nodes[] | (if (.Name // "")!="" then .Name else "["+.ApiHost+"]-"+(.NodeType|ascii_downcase)+":"+(.NodeID|tostring) end) | select(.==$s[0].tag)] | length==1
     ' "$TASK_DIR/config.before" >/dev/null 2>&1 || { fail '多个节点的入站标识相同，不能安全区分。'; return 1; }
     TAG="v2bx-socks-$(printf '%s' "$NODE_TAG" | hash_text)"
     FILES=()
+    if [[ $CORE_KIND == hysteria2 ]]; then
+        # HY2 ACL outbound names must match \w+, unlike Xray/sing tags.
+        TAG=${TAG//-/_}
+        return 0
+    fi
     if [[ $CORE_KIND == xray ]]; then
         ref=$(jq -r '.core.OutboundConfigPath // ""' "$TASK_DIR/selection.json"); FILES+=("$ref")
         ref=$(jq -r '.core.RouteConfigPath // ""' "$TASK_DIR/selection.json"); FILES+=("$ref")
@@ -304,6 +413,10 @@ prepare_candidate() {
 build_candidate() {
     local index=$1 endpoint=$2
     prepare_candidate "$index" || return 1
+    if [[ $CORE_KIND == hysteria2 ]]; then
+        HY2_NODE_INDEX=$index
+        hy2_prepare_candidate apply "$endpoint"; return $?
+    fi
     transform_filter > "$TASK_DIR/transform.jq"
     if ! jq --slurpfile endpoint "$endpoint" --slurpfile selection "$TASK_DIR/selection.json" \
         --arg tag "$TAG" -f "$TASK_DIR/transform.jq" "$TASK_DIR/input.json" \
@@ -375,6 +488,10 @@ JQ
 
 build_remove_candidate() {
     prepare_candidate "$1" || return 1
+    if [[ $CORE_KIND == hysteria2 ]]; then
+        HY2_NODE_INDEX=$1
+        hy2_prepare_candidate remove; return $?
+    fi
     remove_filter > "$TASK_DIR/remove.jq"
     if ! jq --slurpfile selection "$TASK_DIR/selection.json" --arg tag "$TAG" \
         -f "$TASK_DIR/remove.jq" "$TASK_DIR/input.json" > "$TASK_DIR/generated.json" \
@@ -419,60 +536,87 @@ check_drift() {
     current=$(hash_file "$CONFIG_PATH") || return 1
     [[ $current == "$CONFIG_SHA" ]] || return 1
     for ((i=0;i<${#FILES[@]};i++)); do
-        [[ $(hash_file "${FILES[$i]}") == "$(hash_file "$TASK_DIR/$i.before")" ]] || return 1
+        if [[ -f $TASK_DIR/$i.absent ]]; then
+            [[ ! -e ${FILES[$i]} && ! -L ${FILES[$i]} ]] || return 1
+        else
+            [[ $(hash_file "${FILES[$i]}") == "$(hash_file "$TASK_DIR/$i.before")" ]] || return 1
+        fi
     done
+    if [[ -f $TASK_DIR/hy2-source.json ]]; then
+        [[ $(hash_file "$(jq -r .path "$TASK_DIR/hy2-source.json")") == "$(jq -r .sha "$TASK_DIR/hy2-source.json")" ]] || return 1
+    fi
 }
 tx_status() {
     jq --arg status "$1" '.status=$status' "$TX_DIR/manifest.json" > "$TASK_DIR/manifest.next" || return 1
     atomic_copy "$TASK_DIR/manifest.next" "$TX_DIR/manifest.json"
 }
 tx_prepare() {
-    local i mode file_uid file_gid before after mode_decimal
+    local i mode file_uid file_gid before after mode_decimal absent config_after=$CONFIG_SHA
     [[ ! -L $BACKUP_ROOT ]] || return 1
     mkdir -p "$BACKUP_ROOT" && chmod 700 "$BACKUP_ROOT" || return 1
     TX_DIR=$(mktemp -d "$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)-XXXXXX") || return 1
-    jq -n --arg config "$CONFIG_PATH" --arg sha "$CONFIG_SHA" \
+    for ((i=0;i<${#FILES[@]};i++)); do
+        [[ ${FILES[$i]} != "$CONFIG_PATH" ]] || config_after=$(hash_file "$TASK_DIR/$i.after") || return 1
+    done
+    jq -n --arg config "$CONFIG_PATH" --arg sha "$CONFIG_SHA" --arg config_after "$config_after" \
         --slurpfile s "$TASK_DIR/selection.json" \
-        '{schema:2,status:"prepared",config:$config,config_sha:$sha,label:($s[0].kind+" / 节点 "+($s[0].node.NodeID|tostring)),files:[]}' \
+        '{schema:3,status:"prepared",config:$config,config_sha:$sha,config_after:$config_after,label:($s[0].kind+" / 节点 "+($s[0].node.NodeID|tostring)),files:[]}' \
         > "$TASK_DIR/manifest.next" || return 1
     for ((i=0;i<${#FILES[@]};i++)); do
-        read -r mode file_uid file_gid < <(metadata "${FILES[$i]}")
+        absent=false
+        if [[ -f $TASK_DIR/$i.absent ]]; then
+            safe_target "${FILES[$i]}" && [[ ! -e ${FILES[$i]} ]] || return 1
+            absent=true
+            read -r mode file_uid file_gid < <(metadata "$CONFIG_PATH")
+            mode=600
+        else
+            read -r mode file_uid file_gid < <(metadata "${FILES[$i]}")
+        fi
         [[ $mode =~ ^[0-7]+$ && $file_uid =~ ^[0-9]+$ && $file_gid =~ ^[0-9]+$ ]] || return 1
         mode_decimal=$((8#$mode))
         before=$(hash_file "$TASK_DIR/$i.before") && after=$(hash_file "$TASK_DIR/$i.after") || return 1
         atomic_copy "$TASK_DIR/$i.before" "$TX_DIR/$i.bak" || return 1
         jq --arg path "${FILES[$i]}" --arg before "$before" --arg after "$after" --arg backup "$i.bak" \
             --argjson mode "$mode_decimal" --argjson uid "$file_uid" --argjson gid "$file_gid" \
-            '.files += [{path:$path,before:$before,after:$after,backup:$backup,mode:$mode,uid:$uid,gid:$gid}]' \
+            --argjson absent "$absent" \
+            '.files += [{path:$path,before:$before,after:$after,backup:$backup,mode:$mode,uid:$uid,gid:$gid,absent:$absent}]' \
             "$TASK_DIR/manifest.next" > "$TASK_DIR/manifest.add" || return 1
         mv "$TASK_DIR/manifest.add" "$TASK_DIR/manifest.next" || return 1
     done
     atomic_copy "$TASK_DIR/manifest.next" "$TX_DIR/manifest.json"
 }
 restore_check() {
-    local interrupted=${1:-false} path before after backup mode file_uid file_gid current expected_config
+    local interrupted=${1:-false} path before after backup mode file_uid file_gid current expected_config old_config absent
     jq -e '
-      (.schema==1 or .schema==2) and (.files|type=="array" and length>0) and
+      (.schema==1 or .schema==2 or .schema==3) and (.files|type=="array" and length>0) and
       all(.files[]; (.path|type=="string") and (.backup|test("^[0-9]+\\.bak$")) and
-          (.mode|type=="number") and (.uid|type=="number") and (.gid|type=="number"))
+          (.mode|type=="number") and (.uid|type=="number") and (.gid|type=="number") and
+          ((.absent // false)|type=="boolean"))
     ' "$TX_DIR/manifest.json" >/dev/null 2>&1 || { fail '备份格式不正确。'; return 1; }
-    expected_config=$(jq -r '.config_sha // ""' "$TX_DIR/manifest.json")
-    if [[ -n $expected_config && $(hash_file "$CONFIG_PATH") != "$expected_config" ]]; then fail '主配置已被其他操作修改，不能自动恢复旧备份。'; return 1; fi
-    while IFS=$'\t' read -r path before after backup mode file_uid file_gid; do
-        safe_path "$path" || return 1
-        current=$(hash_file "$path") || return 1
-        if [[ $current != "$after" && ( $interrupted != true || $current != "$before" ) ]]; then
+    expected_config=$(jq -r '.config_after // .config_sha // ""' "$TX_DIR/manifest.json")
+    old_config=$(jq -r '.config_sha // ""' "$TX_DIR/manifest.json")
+    current=$(hash_file "$CONFIG_PATH") || return 1
+    if [[ -n $expected_config && $current != "$expected_config" && ( $interrupted != true || $current != "$old_config" ) ]]; then fail '主配置已被其他操作修改，不能自动恢复旧备份。'; return 1; fi
+    while IFS=$'\t' read -r path before after backup mode file_uid file_gid absent; do
+        safe_target "$path" || return 1
+        if [[ -e $path ]]; then current=$(hash_file "$path") || return 1
+        else current=absent; fi
+        if [[ $current != "$after" && ( $interrupted != true || ( $current != "$before" && ( $absent != true || $current != absent ) ) ) ]]; then
             fail "配置已被其他操作改动，拒绝覆盖：$path"; return 1
         fi
         [[ $(hash_file "$TX_DIR/$backup") == "$before" ]] || { fail '备份不完整或已损坏。'; return 1; }
-    done < <(jq -r '.files[]|[.path,.before,.after,.backup,.mode,.uid,.gid]|@tsv' "$TX_DIR/manifest.json")
+    done < <(jq -r '.files[]|[.path,.before,.after,.backup,.mode,.uid,.gid,(.absent // false)]|@tsv' "$TX_DIR/manifest.json")
 }
 restore_files() {
-    local path backup mode file_uid file_gid octal
-    while IFS=$'\t' read -r path backup mode file_uid file_gid; do
+    local path backup mode file_uid file_gid octal absent
+    while IFS=$'\t' read -r path backup mode file_uid file_gid absent; do
+        if [[ $absent == true ]]; then
+            safe_target "$path" && rm -f -- "$path" || return 1
+            continue
+        fi
         printf -v octal '%o' "$mode"
         atomic_copy "$TX_DIR/$backup" "$path" "$octal" "$file_uid:$file_gid" || return 1
-    done < <(jq -r '.files[]|[.path,.backup,.mode,.uid,.gid]|@tsv' "$TX_DIR/manifest.json")
+    done < <(jq -r '.files[]|[.path,.backup,.mode,.uid,.gid,(.absent // false)]|@tsv' "$TX_DIR/manifest.json")
 }
 rollback() {
     local status
@@ -589,9 +733,17 @@ show_socks_config() {
           {kind:$core.Type,
            tag:(if ($node.Name // "")!="" then $node.Name else "["+$node.ApiHost+"]-"+($node.NodeType|ascii_downcase)+":"+($node.NodeID|tostring) end),
            out:(if $core.Type=="sing" then $core.OriginalPath else $core.OutboundConfigPath end),
-           route:(if $core.Type=="sing" then $core.OriginalPath else $core.RouteConfigPath end)} end
+           route:(if $core.Type=="sing" then $core.OriginalPath else $core.RouteConfigPath end),
+           hy2:$node.Hysteria2ConfigPath} end
         ' "$CONFIG_PATH" 2>/dev/null) || { say '  无法读取：节点或内核标识不明确。'; continue; }
         kind=$(printf '%s' "$selection" | jq -r '.kind')
+        if [[ $kind == hysteria2 ]]; then
+            node_tag=$(printf '%s' "$selection" | jq -r '.tag')
+            tag="v2bx-socks-$(printf '%s' "$node_tag" | hash_text)"
+            tag=${tag//-/_}
+            hy2_show_socks "$(printf '%s' "$selection" | jq -r '.hy2 // ""')" "$tag"
+            continue
+        fi
         [[ $kind == xray || $kind == sing ]] || { say '  暂不支持查看此内核的 SOCKS 配置。'; continue; }
         out_path=$(printf '%s' "$selection" | jq -r '.out // ""')
         route_path=$(printf '%s' "$selection" | jq -r '.route // ""')
@@ -950,12 +1102,13 @@ cleanup() {
 }
 help_text() {
     cat <<'HELP'
-V2bX 中文 SOCKS 出口助手 2.7（轻量版）
+V2bX 中文 SOCKS 出口助手 2.8（轻量版）
 安装后使用：v2bx-socks
 只读查看：v2bx-socks --status
 查看 SOCKS 配置：v2bx-socks --show-socks（密码隐藏）
 手动上传脚本后使用：bash v2bx-socks.sh
 依赖：Bash、jq、curl，以及 Linux 自带的 systemd/coreutils 工具。
+独立 Hysteria2 还需要内核提供 hy2-config-json 命令；旧内核会在写入前停止并提示更新。
 菜单：按节点配置 SOCKS、只测试出口、恢复备份、查看状态、查看 SOCKS 配置、检查 / 更新助手、删除节点 SOCKS 出口。
 菜单 7 删除所选节点的助手 SOCKS 配置，恢复原有默认路由；不删除节点。
 菜单 6 可检查 GitHub 更新，确认后备份并更新助手，不重启 V2bX。

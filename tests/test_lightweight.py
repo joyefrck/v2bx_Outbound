@@ -343,7 +343,19 @@ build_candidate 0 "$4" || exit 2
 apply_candidate || exit 2
 backup_list
 TX_DIR=${BACKUPS[0]}
-jq '.schema=1 | del(.config,.config_sha)' "$TX_DIR/manifest.json" > "$TASK_DIR/legacy.json"
+jq '.schema=1 | del(.config,.config_sha,.config_after) | .files |= map(del(.absent))' "$TX_DIR/manifest.json" > "$TASK_DIR/legacy.json"
+cp "$TASK_DIR/legacy.json" "$TX_DIR/manifest.json"
+restore_check false && restore_files
+''')
+        self.assertEqual(before, (self.out.read_bytes(), self.route.read_bytes()))
+
+    def test_v2_existing_file_backups_can_be_restored(self):
+        self.setup_config()
+        before = self.out.read_bytes(), self.route.read_bytes()
+        self.shell(self.MOCKS + '''
+build_candidate 0 "$4" && apply_candidate || exit 2
+backup_list; TX_DIR=${BACKUPS[0]}
+jq '.schema=2 | del(.config_after) | .files |= map(del(.absent))' "$TX_DIR/manifest.json" > "$TASK_DIR/legacy.json"
 cp "$TASK_DIR/legacy.json" "$TX_DIR/manifest.json"
 restore_check false && restore_files
 ''')

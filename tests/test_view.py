@@ -101,7 +101,7 @@ show_socks_config
     def test_unsupported_core_is_reported(self):
         self.setup_config()
         config = json.loads(self.config.read_text())
-        config['Nodes'][0]['Core'] = 'hysteria2'
-        config['Cores'] = [{'Type': 'hysteria2'}]
+        config['Nodes'][0]['Core'] = 'other'
+        config['Cores'] = [{'Type': 'other'}]
         self.write(self.config, config)
         self.assertIn('暂不支持查看此内核', self.view())

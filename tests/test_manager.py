@@ -178,9 +178,14 @@ m_offer_socks
         self.assertNotIn('unexpected', r.stdout)
 
     def test_unsupported_core_does_not_open_socks(self):
-        (self.cfg / 'config.json').write_text('{"Cores":[{"Type":"hysteria2"}]}')
+        (self.cfg / 'config.json').write_text('{"Cores":[{"Type":"other"}]}')
         r = self.run_shell('m_health() { return 0; }; m_offer_socks')
-        self.assertIn('不支持 SOCKS', r.stdout)
+        self.assertIn('尚未适配此内核', r.stdout)
+
+    def test_standalone_hy2_offers_socks_helper(self):
+        (self.cfg / 'config.json').write_text('{"Cores":[{"Type":"hysteria2"}]}')
+        r = self.run_shell('m_health() { return 0; }; m_confirm() { return 0; }; m_socks() { echo HY2-SOCKS; }; m_offer_socks')
+        self.assertIn('HY2-SOCKS', r.stdout)
 
     def test_json_escaping_and_no_secret_output(self):
         key = 'test-"key\\secret'

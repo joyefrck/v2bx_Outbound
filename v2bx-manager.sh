@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # V2bX Integrated Manager - MPL-2.0; see vendor/v2bx-script/UPSTREAM.md.
 set -uo pipefail
-MANAGER_VERSION=3.7.2
+MANAGER_VERSION=3.8.0
 M_CONFIG=/etc/V2bX
 M_BINARY=/usr/local/V2bX
 M_UNIT=/etc/systemd/system/V2bX.service
@@ -159,8 +159,8 @@ m_standard_config() {
 m_socks() { m_need_install && bash "$M_HELPER"; }
 m_offer_socks() {
     m_health || { m_diagnose; return 1; }
-    if ! jq -e 'any(.Cores[]; .Type=="xray" or .Type=="sing")' "$M_CONFIG/config.json" >/dev/null; then
-        printf '当前内核不支持 SOCKS 出口；V2bX 可正常使用。\n'; return 0
+    if ! jq -e 'any(.Cores[]; .Type=="xray" or .Type=="sing" or .Type=="hysteria2")' "$M_CONFIG/config.json" >/dev/null; then
+        printf '当前 SOCKS 助手尚未适配此内核；V2bX 可正常使用。\n'; return 0
     fi
     m_confirm '是否配置 SOCKS 出口？' || { printf '已跳过 SOCKS 出口配置。以后运行 v2bx socks。\n'; return 0; }
     m_socks
