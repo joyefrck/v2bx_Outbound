@@ -2,6 +2,7 @@ package task
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -12,25 +13,18 @@ type Task struct {
 	// Execute is the task function
 	Execute func() error
 
-	access  sync.Mutex
-	timer   *time.Timer
-	running bool
-}
-
-func (t *Task) hasClosed() bool {
-	t.access.Lock()
-	defer t.access.Unlock()
-
-	return !t.running
+	access   sync.Mutex
+	timer    *time.Timer
+	running  bool
+	interval atomic.Int64
 }
 
 func (t *Task) checkedExecute(first bool) error {
-	if t.hasClosed() {
-		return nil
-	}
-
 	t.access.Lock()
 	defer t.access.Unlock()
+	if !t.running {
+		return nil
+	}
 	if first {
 		if err := t.Execute(); err != nil {
 			t.running = false
@@ -40,11 +34,21 @@ func (t *Task) checkedExecute(first bool) error {
 	if !t.running {
 		return nil
 	}
-	t.timer = time.AfterFunc(t.Interval, func() {
+	delay := t.Interval
+	if value := t.interval.Load(); value > 0 {
+		delay = time.Duration(value)
+	}
+	t.timer = time.AfterFunc(delay, func() {
 		t.checkedExecute(true)
 	})
 
 	return nil
+}
+
+func (t *Task) SetInterval(interval time.Duration) {
+	if interval > 0 {
+		t.interval.Store(int64(interval))
+	}
 }
 
 // Start implements common.Runnable.

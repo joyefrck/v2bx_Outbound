@@ -20,6 +20,8 @@ const (
 )
 
 type NodeInfo struct {
+	responseHash string
+	responseETag string
 	Id           int
 	Type         string
 	Security     int
@@ -69,6 +71,7 @@ type VAllssNode struct {
 	NetworkSettingsBack json.RawMessage `json:"networkSettings"`
 	Encryption          string          `json:"encryption"`
 	EncryptionSettings  EncSettings     `json:"encryption_settings"`
+	Decryption          *string         `json:"decryption"`
 	ServerName          string          `json:"server_name"`
 
 	// vless only
@@ -157,6 +160,17 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		ForceContentType("application/json").
 		Get(path)
 
+	if err = c.checkResponse(r, path, err); err != nil {
+		return nil, err
+	}
+	if r == nil {
+		return nil, fmt.Errorf("received nil response")
+	}
+	defer func() {
+		if r.RawBody() != nil {
+			r.RawBody().Close()
+		}
+	}()
 	if r.StatusCode() == 304 {
 		return nil, nil
 	}
@@ -165,24 +179,14 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	if c.responseBodyHash == newBodyHash {
 		return nil, nil
 	}
-	c.responseBodyHash = newBodyHash
-	c.nodeEtag = r.Header().Get("ETag")
-	if err = c.checkResponse(r, path, err); err != nil {
-		return nil, err
-	}
 
-	if r != nil {
-		defer func() {
-			if r.RawBody() != nil {
-				r.RawBody().Close()
-			}
-		}()
-	} else {
-		return nil, fmt.Errorf("received nil response")
-	}
 	node = &NodeInfo{
-		Id:   c.NodeId,
-		Type: c.NodeType,
+		PushInterval: 60 * time.Second,
+		PullInterval: 60 * time.Second,
+		responseHash: newBodyHash,
+		responseETag: r.Header().Get("ETag"),
+		Id:           c.NodeId,
+		Type:         c.NodeType,
 		RawDNS: RawDNS{
 			DNSMap:  make(map[string]map[string]interface{}),
 			DNSJson: []byte(""),
@@ -204,6 +208,11 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		if rsp.TlsSettingsBack != nil {
 			rsp.TlsSettings = *rsp.TlsSettingsBack
 			rsp.TlsSettingsBack = nil
+		}
+		if c.NodeType == "vless" {
+			if _, err := rsp.VLESSDecryption(); err != nil {
+				return nil, err
+			}
 		}
 		cm = &rsp.CommonNode
 		node.VAllss = rsp
@@ -267,16 +276,24 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	// parse rules and dns
 	for i := range cm.Routes {
 		var matchs []string
-		if _, ok := cm.Routes[i].Match.(string); ok {
-			matchs = strings.Split(cm.Routes[i].Match.(string), ",")
-		} else if _, ok = cm.Routes[i].Match.([]string); ok {
-			matchs = cm.Routes[i].Match.([]string)
-		} else {
-			temp := cm.Routes[i].Match.([]interface{})
-			matchs = make([]string, len(temp))
-			for i := range temp {
-				matchs[i] = temp[i].(string)
+		switch value := cm.Routes[i].Match.(type) {
+		case string:
+			matchs = strings.Split(value, ",")
+		case []string:
+			matchs = append(matchs, value...)
+		case []interface{}:
+			for _, item := range value {
+				text, ok := item.(string)
+				if !ok {
+					return nil, fmt.Errorf("invalid node route match")
+				}
+				matchs = append(matchs, text)
 			}
+		default:
+			return nil, fmt.Errorf("invalid node route match")
+		}
+		if len(matchs) == 0 {
+			return nil, fmt.Errorf("empty node route match")
 		}
 		switch cm.Routes[i].Action {
 		case "block":
@@ -305,8 +322,14 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	}
 
 	// set interval
-	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)
-	node.PullInterval = intervalToTime(cm.BaseConfig.PullInterval)
+	if cm.BaseConfig != nil {
+		if value := intervalToTime(cm.BaseConfig.PushInterval); value > 0 {
+			node.PushInterval = value
+		}
+		if value := intervalToTime(cm.BaseConfig.PullInterval); value > 0 {
+			node.PullInterval = value
+		}
+	}
 
 	node.Common = cm
 	// clear
@@ -316,7 +339,18 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	return node, nil
 }
 
+func (c *Client) AcceptNodeInfo(node *NodeInfo) {
+	if node == nil {
+		return
+	}
+	c.responseBodyHash = node.responseHash
+	c.nodeEtag = node.responseETag
+}
+
 func intervalToTime(i interface{}) time.Duration {
+	if i == nil {
+		return 0
+	}
 	switch reflect.TypeOf(i).Kind() {
 	case reflect.Int:
 		return time.Duration(i.(int)) * time.Second
@@ -326,6 +360,6 @@ func intervalToTime(i interface{}) time.Duration {
 	case reflect.Float64:
 		return time.Duration(i.(float64)) * time.Second
 	default:
-		return time.Duration(reflect.ValueOf(i).Int()) * time.Second
+		return 0
 	}
 }

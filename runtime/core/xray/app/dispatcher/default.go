@@ -5,7 +5,6 @@ package dispatcher
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -108,6 +107,7 @@ type DefaultDispatcher struct {
 	stats        stats.Manager
 	fdns         dns.FakeDNSEngine
 	Counter      sync.Map
+	AllowedUsers sync.Map
 	LinkManagers sync.Map // map[string]*LinkManager
 }
 
@@ -194,18 +194,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			common.Interrupt(inboundLink.Reader)
 			return nil, nil, nil, errors.New("Limited ", user.Email, " by conn or ip")
 		}
-		var lm *LinkManager
-		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = &LinkManager{
-				links: make(map[*ManagedWriter]buf.Reader),
-			}
-			d.LinkManagers.Store(user.Email, lm)
-		} else {
-			lm = lmloaded.(*LinkManager)
-		}
+		lm := d.linkManager(user.Email)
 		managedWriter := &ManagedWriter{
-			writer:  uplinkWriter,
-			manager: lm,
+			writer:     uplinkWriter,
+			manager:    lm,
+			connection: sessionInbound.Conn,
 		}
 		lm.AddLink(managedWriter, outboundLink.Reader)
 		inboundLink.Writer = managedWriter
@@ -214,13 +207,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			inboundLink.Writer = rate.NewRateLimitWriter(inboundLink.Writer, w)
 			outboundLink.Writer = rate.NewRateLimitWriter(outboundLink.Writer, w)
 		}
-		var t *counter.TrafficCounter
-		if c, ok := d.Counter.Load(sessionInbound.Tag); !ok {
-			t = counter.NewTrafficCounter()
-			d.Counter.Store(sessionInbound.Tag, t)
-		} else {
-			t = c.(*counter.TrafficCounter)
-		}
+		t := d.trafficCounter(sessionInbound.Tag)
 
 		ts := t.GetCounter(user.Email)
 		upcounter := &counter.XrayTrafficCounter{V: &ts.UpCounter}
@@ -233,6 +220,13 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			Counter: downcounter,
 			Writer:  outboundLink.Writer,
 		}
+		if _, allowed := d.AllowedUsers.Load(user.Email); !allowed {
+			lm.CloseAll()
+			d.LinkManagers.CompareAndDelete(user.Email, lm)
+			_ = common.Close(outboundLink.Writer)
+			common.Interrupt(inboundLink.Reader)
+			return nil, nil, nil, errors.New("user has been revoked")
+		}
 	}
 
 	return inboundLink, outboundLink, limit, nil
@@ -243,22 +237,11 @@ func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResu
 	if domain == "" {
 		return false
 	}
-	for _, d := range request.ExcludeForDomain {
-		if strings.HasPrefix(d, "regexp:") {
-			pattern := d[7:]
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				errors.LogInfo(ctx, "Unable to compile regex")
-				continue
-			}
-			if re.MatchString(domain) {
-				return false
-			}
-		} else {
-			if strings.ToLower(domain) == d {
-				return false
-			}
-		}
+	if request.ExcludeForDomain != nil && request.ExcludeForDomain.MatchAny(strings.ToLower(domain)) {
+		return false
+	}
+	if request.ExcludeForIP != nil && destination.Address.Family().IsIP() && request.ExcludeForIP.Match(destination.Address.IP()) {
+		return false
 	}
 	protocolString := result.Protocol()
 	if resComp, ok := result.(SnifferResultComposite); ok {
@@ -388,31 +371,18 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			common.Interrupt(outbound.Reader)
 			return errors.New("Limited ", user.Email, " by conn or ip")
 		}
-		var lm *LinkManager
-		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = &LinkManager{
-				links: make(map[*ManagedWriter]buf.Reader),
-			}
-			d.LinkManagers.Store(user.Email, lm)
-		} else {
-			lm = lmloaded.(*LinkManager)
-		}
+		lm := d.linkManager(user.Email)
 		managedWriter := &ManagedWriter{
-			writer:  outbound.Writer,
-			manager: lm,
+			writer:     outbound.Writer,
+			manager:    lm,
+			connection: sessionInbound.Conn,
 		}
 		outbound.Writer = managedWriter
 		if w != nil {
 			sessionInbound.CanSpliceCopy = 3
 			outbound.Writer = rate.NewRateLimitWriter(outbound.Writer, w)
 		}
-		var t *counter.TrafficCounter
-		if c, ok := d.Counter.Load(sessionInbound.Tag); !ok {
-			t = counter.NewTrafficCounter()
-			d.Counter.Store(sessionInbound.Tag, t)
-		} else {
-			t = c.(*counter.TrafficCounter)
-		}
+		t := d.trafficCounter(sessionInbound.Tag)
 
 		ts := t.GetCounter(user.Email)
 		downcounter := &counter.XrayTrafficCounter{V: &ts.DownCounter}
@@ -424,6 +394,11 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		outbound.Writer = &dispatcher.SizeStatWriter{
 			Counter: downcounter,
 			Writer:  outbound.Writer,
+		}
+		if _, allowed := d.AllowedUsers.Load(user.Email); !allowed {
+			lm.CloseAll()
+			d.LinkManagers.CompareAndDelete(user.Email, lm)
+			return errors.New("user has been revoked")
 		}
 	}
 
@@ -629,4 +604,14 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	handler.Dispatch(ctx, link)
+}
+
+func (d *DefaultDispatcher) linkManager(email string) *LinkManager {
+	value, _ := d.LinkManagers.LoadOrStore(email, &LinkManager{links: make(map[*ManagedWriter]buf.Reader)})
+	return value.(*LinkManager)
+}
+
+func (d *DefaultDispatcher) trafficCounter(tag string) *counter.TrafficCounter {
+	value, _ := d.Counter.LoadOrStore(tag, counter.NewTrafficCounter())
+	return value.(*counter.TrafficCounter)
 }

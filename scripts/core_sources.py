@@ -26,7 +26,7 @@ def archive(source, modfile, tags, env, target, root):
         tar.add(root/'scripts',arcname='scripts',filter=normalized)
         readme=source/'SOURCE-README.txt'
         readme.write_text('Corresponding source for this integrated V2bX build. Original and modified module licences are included in each module directory.\n'
-          'Use Go 1.26.1 with GOEXPERIMENT=jsonv2. For an offline source rebuild, edit runtime/patched.mod to replace each path in modules.json with ../modules/<path>@<version>, then run go build -modfile=patched.mod -mod=readonly -tags "'+ ' '.join(tags)+'" . from runtime/.\n'
+          'Use Go 1.27.3 with GOEXPERIMENT=jsonv2. For an offline source rebuild, edit runtime/patched.mod to replace each path in modules.json with ../modules/<path>@<version>, then run go build -modfile=patched.mod -mod=readonly -tags "'+ ' '.join(tags)+'" . from runtime/.\n'
           'Some sources include example/test keys from public upstream fixtures. None are deployment credentials.\n')
         tar.add(readme,arcname='SOURCE-README.txt',filter=normalized)
         mp=source/'modules.json';mp.write_text(json.dumps({k:{'version':v['version'],'archive':v['archive']} for k,v in modules.items()},sort_keys=True,indent=2))

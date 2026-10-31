@@ -175,11 +175,11 @@
     "sha256": "e90447684c1de5ba3428618af290d33acf40df87e41f3e8185a835b37b0e808e"
   },
   {
-    "module": "github.com/xtls/xray-core@v1.260327.0",
+    "module": "github.com/xtls/xray-core@v1.260327.1-0.20261031132019-a4a3dff5b20c",
     "path": "transport/internet/tls/config.go",
     "replacement": "xray/transport/internet/tls/config.go",
-    "upstream_sha256": "331a74916d525934e9f955309455e572fab97f192e9f39cf592b8f79d997d774",
-    "sha256": "3e1fcc77143034c49e704e5596d5b909dcd387be3e1951f4b811b27e5ae4c1ed"
+    "upstream_sha256": "159270ac6ce0bc87f48b29acdddf3676349d3b8c0ec5f183be4397ed8e69d8e8",
+    "sha256": "26ecb9c9277c80d6e150d9442205fe907473c508ce1d820e23f7b9bc190c0294"
   },
   {
     "module": "github.com/anytls/sing-anytls@v0.0.11",

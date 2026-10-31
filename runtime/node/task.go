@@ -50,6 +50,8 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 }
 
 func (c *Controller) nodeInfoMonitor() (err error) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
 	// get node info
 	newN, err := c.apiClient.GetNodeInfo()
 	if err != nil {
@@ -77,7 +79,19 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}).Error("Get alive list failed")
 		return nil
 	}
+	if newN != nil && newN.Type == "vless" {
+		users := newU
+		if newU == nil {
+			users = c.userList
+		}
+		if err := c.replaceVLESSNode(newN, users, newA); err != nil {
+			log.WithField("tag", c.tag).Error(err)
+		}
+		return nil
+	}
 	if newN != nil {
+		unlock := vCore.LockNodeUpdates()
+		defer unlock()
 		c.info = newN
 		// nodeInfo changed
 		if newU != nil {
@@ -150,19 +164,10 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			}).Error("Add users failed")
 			return nil
 		}
-		// Check interval
-		if c.nodeInfoMonitorPeriodic.Interval != newN.PullInterval &&
-			newN.PullInterval != 0 {
-			c.nodeInfoMonitorPeriodic.Interval = newN.PullInterval
-			c.nodeInfoMonitorPeriodic.Close()
-			_ = c.nodeInfoMonitorPeriodic.Start(false)
-		}
-		if c.userReportPeriodic.Interval != newN.PushInterval &&
-			newN.PushInterval != 0 {
-			c.userReportPeriodic.Interval = newN.PullInterval
-			c.userReportPeriodic.Close()
-			_ = c.userReportPeriodic.Start(false)
-		}
+		c.nodeInfoMonitorPeriodic.SetInterval(newN.PullInterval)
+		c.userReportPeriodic.SetInterval(newN.PushInterval)
+		c.apiClient.AcceptNodeInfo(newN)
+		c.apiClient.AcceptUserList()
 		log.WithField("tag", c.tag).Infof("Added %d new users", len(c.userList))
 		// exit
 		return nil
@@ -172,7 +177,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.limiter.AliveList = newA
 	}
 	// node no changed, check users
-	if len(newU) == 0 {
+	if newU == nil {
 		return nil
 	}
 	deleted, added := compareUserList(c.userList, newU)
@@ -220,6 +225,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}
 	}
 	c.userList = newU
+	c.apiClient.AcceptUserList()
 	if len(added)+len(deleted) != 0 {
 		log.WithField("tag", c.tag).
 			Infof("%d user deleted, %d user added", len(deleted), len(added))
@@ -228,6 +234,8 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 }
 
 func (c *Controller) SpeedChecker() error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
 	for u, t := range c.traffic {
 		if t >= c.LimitConfig.DynamicSpeedLimitConfig.Traffic {
 			err := c.limiter.UpdateDynamicSpeedLimit(c.tag, u,

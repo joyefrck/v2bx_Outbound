@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
+	stdnet "net"
 	"time"
 
 	"encoding/json"
@@ -64,7 +64,7 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 	// Set SniffingConfig
 	sniffingConfig := &coreConf.SniffingConfig{
 		Enabled:      true,
-		DestOverride: &coreConf.StringList{"http", "tls"},
+		DestOverride: coreConf.StringList{"http", "tls"},
 	}
 	if option.XrayOptions.DisableSniffing {
 		sniffingConfig.Enabled = false
@@ -130,10 +130,7 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 		if xver == 0 {
 			xver = v.RealityConfig.Xver
 		}
-		d, err := json.Marshal(fmt.Sprintf(
-			"%s:%s",
-			dest,
-			v.TlsSettings.ServerPort))
+		d, err := json.Marshal(stdnet.JoinHostPort(dest, v.TlsSettings.ServerPort))
 		if err != nil {
 			return nil, fmt.Errorf("marshal reality dest error: %s", err)
 		}
@@ -160,6 +157,13 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig) error {
 	v := nodeInfo.VAllss
 	if nodeInfo.Type == "vless" {
+		decryption, err := v.VLESSDecryption()
+		if err != nil {
+			return err
+		}
+		if config.XrayOptions.EnableFallback && decryption != "none" {
+			return fmt.Errorf("VLESS encryption with fallback is not supported")
+		}
 		//Set vless
 		inbound.Protocol = "vless"
 		if config.XrayOptions.EnableFallback {
@@ -177,26 +181,7 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 			}
 			inbound.Settings = (*json.RawMessage)(&s)
 		} else {
-			var err error
-			decryption := "none"
-			if nodeInfo.VAllss.Encryption != "" {
-				switch nodeInfo.VAllss.Encryption {
-				case "mlkem768x25519plus":
-					encSettings := nodeInfo.VAllss.EncryptionSettings
-					parts := []string{
-						"mlkem768x25519plus",
-						encSettings.Mode,
-						encSettings.Ticket,
-					}
-					if encSettings.ServerPadding != "" {
-						parts = append(parts, encSettings.ServerPadding)
-					}
-					parts = append(parts, encSettings.PrivateKey)
-					decryption = strings.Join(parts, ".")
-				default:
-					return fmt.Errorf("vless decryption method %s is not support", nodeInfo.VAllss.Encryption)
-				}
-			}
+
 			s, err := json.Marshal(&coreConf.VLessInboundConfig{
 				Decryption: decryption,
 			})

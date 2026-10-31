@@ -66,7 +66,7 @@ func isSupported(protocol string, protocols []string) bool {
 	return false
 }
 
-func (s *Selector) AddNode(tag string, info *panel.NodeInfo, option *conf.Options) error {
+func (s *Selector) selectCore(info *panel.NodeInfo, option *conf.Options) (Core, error) {
 	var core Core
 	if len(option.CoreName) > 0 {
 		// use name to select core
@@ -87,22 +87,60 @@ func (s *Selector) AddNode(tag string, info *panel.NodeInfo, option *conf.Option
 		}
 	}
 	if core == nil {
-		return errors.New("the node type is not support")
+		return nil, errors.New("the node type is not support")
 	}
 	if len(option.Core) == 0 {
 		option.Core = core.Type()
 		err := option.UnmarshalJSON(option.RawOptions)
 		if err != nil {
-			return fmt.Errorf("unmarshal option error: %s", err)
+			return nil, fmt.Errorf("unmarshal option error: %s", err)
 		}
 		option.RawOptions = nil
 	}
-	err := core.AddNode(tag, info, option)
+	return core, nil
+}
+
+func (s *Selector) ValidateNode(tag string, info *panel.NodeInfo, option *conf.Options) error {
+	candidate := *option
+	selected, err := s.selectCore(info, &candidate)
+	if err != nil {
+		return err
+	}
+	validator, ok := selected.(NodeValidator)
+	if !ok {
+		return errors.New("selected core does not provide node preflight")
+	}
+	return validator.ValidateNode(tag, info, &candidate)
+}
+
+func (s *Selector) AddNode(tag string, info *panel.NodeInfo, option *conf.Options) error {
+	core, err := s.selectCore(info, option)
+	if err != nil {
+		return err
+	}
+
+	err = core.AddNode(tag, info, option)
 	if err != nil {
 		return err
 	}
 	s.nodes.Store(tag, core)
 	return nil
+}
+
+func (s *Selector) SnapshotNodeState(tag string, info *panel.NodeInfo, options *conf.Options) (func() error, error) {
+	selected, ok := s.nodes.Load(tag)
+	if !ok {
+		candidate := *options
+		var err error
+		selected, err = s.selectCore(info, &candidate)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if snapshotter, ok := selected.(NodeStateSnapshotter); ok {
+		return snapshotter.SnapshotNodeState(tag, info, options)
+	}
+	return func() error { return nil }, nil
 }
 
 func (s *Selector) DelNode(tag string) error {

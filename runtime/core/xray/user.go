@@ -3,6 +3,7 @@ package xray
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/counter"
@@ -39,28 +40,34 @@ func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) e
 	defer c.users.mapLock.Unlock()
 	for i := range users {
 		user = format.UserTag(tag, users[i].Uuid)
-		err = userManager.RemoveUser(context.Background(), user)
-		if err != nil {
-			return err
+		if userManager.GetUser(context.Background(), user) != nil {
+			if err := userManager.RemoveUser(context.Background(), user); err != nil {
+				return err
+			}
 		}
-		delete(c.users.uidMap, user)
-		if v, ok := c.dispatcher.Counter.Load(tag); ok {
-			tc := v.(*counter.TrafficCounter)
-			tc.Delete(user)
-		}
+		c.dispatcher.AllowedUsers.Delete(user)
 		if v, ok := c.dispatcher.LinkManagers.Load(user); ok {
 			lm := v.(*dispatcher.LinkManager)
 			lm.CloseAll()
 			c.dispatcher.LinkManagers.Delete(user)
 		}
+		c.retainUserTraffic(tag, user, c.users.uidMap[user])
+		delete(c.users.uidMap, user)
+		if v, ok := c.dispatcher.Counter.Load(tag); ok {
+			v.(*counter.TrafficCounter).Delete(user)
+		}
+
 	}
 	return nil
 }
 
 func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic, error) {
-	trafficSlice := make([]panel.UserTraffic, 0)
-	x.users.mapLock.RLock()
-	defer x.users.mapLock.RUnlock()
+	x.users.mapLock.Lock()
+	defer x.users.mapLock.Unlock()
+	trafficSlice := append([]panel.UserTraffic(nil), x.retiredTraffic[tag]...)
+	if reset {
+		delete(x.retiredTraffic, tag)
+	}
 	if v, ok := x.dispatcher.Counter.Load(tag); ok {
 		c := v.(*counter.TrafficCounter)
 		c.Counters.Range(func(key, value interface{}) bool {
@@ -70,8 +77,8 @@ func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 			down := traffic.DownCounter.Load()
 			if up+down > x.nodeReportMinTrafficBytes[tag] {
 				if reset {
-					traffic.UpCounter.Store(0)
-					traffic.DownCounter.Store(0)
+					up = traffic.UpCounter.Swap(0)
+					down = traffic.DownCounter.Swap(0)
 				}
 				if x.users.uidMap[email] == 0 {
 					c.Delete(email)
@@ -90,15 +97,12 @@ func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 		}
 		return trafficSlice, nil
 	}
-	return nil, nil
+	return trafficSlice, nil
 }
 
 func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	c.users.mapLock.Lock()
 	defer c.users.mapLock.Unlock()
-	for i := range p.Users {
-		c.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
-	}
 	var users []*protocol.User
 	switch p.NodeInfo.Type {
 	case "vmess":
@@ -119,15 +123,60 @@ func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("get user manager error: %s", err)
 	}
+	memoryUsers := make([]*protocol.MemoryUser, 0, len(users))
 	for _, u := range users {
 		mUser, err := u.ToMemoryUser()
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("invalid user configuration")
 		}
-		err = man.AddUser(context.Background(), mUser)
-		if err != nil {
-			return 0, err
+		memoryUsers = append(memoryUsers, mUser)
+	}
+	installed := make([]string, 0, len(users))
+	for _, u := range memoryUsers {
+		if err := man.AddUser(context.Background(), u); err != nil {
+			for _, email := range installed {
+				_ = man.RemoveUser(context.Background(), email)
+			}
+			return 0, fmt.Errorf("could not install users")
 		}
+		installed = append(installed, u.Email)
+	}
+	for i := range p.Users {
+		email := format.UserTag(p.Tag, p.Users[i].Uuid)
+		c.users.uidMap[email] = p.Users[i].Id
+		c.dispatcher.LinkManagers.Delete(email)
+		c.dispatcher.AllowedUsers.Store(email, true)
 	}
 	return len(users), nil
+}
+
+func (c *Xray) retireNodeUsers(tag string) {
+	c.users.mapLock.Lock()
+	defer c.users.mapLock.Unlock()
+	prefix := tag + "|"
+	for email, uid := range c.users.uidMap {
+		if !strings.HasPrefix(email, prefix) {
+			continue
+		}
+		c.dispatcher.AllowedUsers.Delete(email)
+		if v, ok := c.dispatcher.LinkManagers.LoadAndDelete(email); ok {
+			v.(*dispatcher.LinkManager).CloseAll()
+		}
+		c.retainUserTraffic(tag, email, uid)
+		delete(c.users.uidMap, email)
+	}
+	c.dispatcher.Counter.Delete(tag)
+	delete(c.nodeReportMinTrafficBytes, tag)
+}
+
+func (c *Xray) retainUserTraffic(tag, email string, uid int) {
+	if v, ok := c.dispatcher.Counter.Load(tag); ok {
+		if value, ok := v.(*counter.TrafficCounter).Counters.Load(email); ok {
+			counts := value.(*counter.TrafficStorage)
+			up, down := counts.UpCounter.Swap(0), counts.DownCounter.Swap(0)
+			if up+down > 0 {
+				c.retiredTraffic[tag] = append(c.retiredTraffic[tag], panel.UserTraffic{UID: uid, Upload: up, Download: down})
+			}
+		}
+	}
 }

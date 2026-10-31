@@ -17,6 +17,41 @@
 没有本仓库稳定发布、网络失败或签名失败时，保留当前程序，不回退旧下载源。
 本版通道提供 Linux amd64/arm64。管理工具仍能识别旧 s390x 安装，但不宣称它已有新内核构建。
 
+## VLESS 升级候选 core-v1.1.0（2026-11-01）
+
+当前源码锁定 Xray `v26.10.31`、提交 `a4a3dff5b20c2faae567b742c172c7b95e75c083`，
+Go 模块版本 `v1.260327.1-0.20261031132019-a4a3dff5b20c`、Go `1.27.3`。
+模块下载校验和与补丁摘要见 `runtime/cores.lock.json`；sing-box / Hysteria2 的锁定版本保持不变，
+Go 最小版本选择导致的间接依赖更新记录在 `runtime/go.mod` / `go.sum`。
+本节描述未发布的源码候选，不能据此认为服务器已经安装此版本。
+
+- 支持 Xboard 完整 `decryption` 和旧分段字段；冲突或错误参数会被拒绝，不会静默关闭加密。
+- `V2bX vlessenc --json --auth x25519` 在本机生成可导入面板的客户端/服务端参数。
+  VLESS Encryption 本身使用混合 ML-KEM/X25519 密钥交换；`auth` 选择的是长期认证材料。
+  CLI 另支持 `--auth mlkem768`，但本批 Xboard 只允许能验证密钥配对的 X25519 认证参数。
+- Xray 支持加密 TCP、XHTTP；sing-box 增强节点及 Encryption + Fallback 组合明确拒绝。
+- VLESS 重载先预检，再替换监听和用户；失败恢复旧监听、用户、限制器和 DNS 文件，下一轮重试。
+  同端口替换允许短暂重连，恢复失败会明确记录错误。
+- 新版 REALITY 服务端要求 ClientHello 携带 X25519MLKEM768。Mihomo 必须显式下发
+  `reality-opts.support-x25519mlkem768: true` 并使用支持该 KeyShare 的 chrome 指纹。
+  Xboard 按节点实际登记的 `backend: {core: xray, release: core-v1.1.0}` 输出该参数，旧服务端 profile 不改。
+  旧订阅和旧客户端可能不兼容新服务端；不可直接把全部 REALITY 生产节点滚动升级后只检查端口。
+  应先在独立节点验证客户端、配置与刷新订阅，再同步安排服务端升级；短暂重连和旧缓存失效需计入迁移。
+- 新版 Xray 默认阻止部分协议访问内网地址。保持此默认；确有内网目标需求时，在指定节点 Options 中
+  显式配置 `"AllowPrivateNetwork": true`。该开关放宽该节点 Freedom 出口的最终规则，不改变自定义 SOCKS 路由。
+- 上游移除了 Xray `allowInsecure` 和 Shadowsocks `none/plain`。已有自定义 Xray 出站使用这些字段时，
+  应在升级前迁移到证书固定/验证名称或受支持的加密方式；不要关闭预检查绕过不兼容配置。
+- TLS VLESS 节点必须配置有效证书文件，缺少证书不会退化为明文监听。
+- ECH 本批暂缓。增强节点先在独立测试端口验证实际客户端，再启用；不要覆盖现有节点的密钥与协议。
+
+双架构 CI 继续执行脚本、Go/race、SOCKS、HY2、VLESS 真实进程和 systemd 更新事务测试。
+VLESS 端到端客户端固定为 Mihomo v1.19.33，提交和 Go 校验和锁在 `tests/mihomo-client.lock.json`。
+`python3 scripts/build_test_client.py --output /tmp/mihomo-client` 只构建测试客户端，不打入 V2bX 发布包；
+随后用 `python3 tests/runtime_vless.py /path/to/V2bX /tmp/mihomo-client` 测试回环 mock panel、HTTPS、
+加密 TCP/裸传输、旧 REALITY/Vision、新加密 REALITY/Vision、XHTTP/TLS 和 XHTTP/REALITY、
+无效参数保留监听及重试、流量归属与最后用户撤销。实际桌面/移动安装包另行验收。
+本地检查与原生双架构 CI、稳定发布、生产验收分别记录。
+
 ## 第一组锁定版本
 
 `core-v1.0.2` 保持相同的内核依赖及 Geo 快照，新增只读 `hy2-config-json` 命令，供 SOCKS 助手 2.8.0 / 管理工具 3.8.0 读取独立 HY2 的 YAML/JSON 配置。配套助手支持按节点配置、更换、查看和删除 SOCKS 出口，并将共享配置隔离到节点独立文件。旧内核缺少命令时会在写入前停止。升级内核不会自动给已有节点配置 SOCKS。
@@ -58,7 +93,7 @@ V2bX 基础源码的来源、固定提交和许可证在 `runtime/UPSTREAM.md`�
 
 ```bash
 # 本地准备经过校验的私有模块副本
-GOTOOLCHAIN=go1.26.1 python3 scripts/core_overlay.py /tmp/v2bx-core.json
+GOTOOLCHAIN=go1.27.3 python3 scripts/core_overlay.py /tmp/v2bx-core.json
 # 在 runtime/ 中运行测试，使用上述生成的 /tmp/v2bx-core.mod
 # 原生 Linux 构建、源码归档和打包
 python3 scripts/build_core.py --output /tmp/core-dist --arch amd64

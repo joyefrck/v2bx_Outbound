@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
-          go-version: '1.26.1'
+          go-version: '1.27.3'
           cache-dependency-path: runtime/go.sum
       - name: Install test dependencies
         run: sudo apt-get update && sudo apt-get install -y jq unzip openssl
@@ -48,13 +48,16 @@ jobs:
         run: |
           tags='sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor'
           go test -timeout 180s -modfile="$RUNNER_TEMP/core.mod" -mod=readonly -tags "$tags" ./...
-          go test -race -timeout 180s -modfile="$RUNNER_TEMP/core.mod" -mod=readonly -tags "$tags" ./core/sing ./common/counter
+          go test -race -timeout 180s -modfile="$RUNNER_TEMP/core.mod" -mod=readonly -tags "$tags" ./api/panel ./node ./core ./core/xray ./core/xray/app/dispatcher ./limiter ./common/task ./core/sing ./common/counter
       - name: Build locked runtime, corresponding source and Geo snapshot
         run: python3 scripts/build_core.py --output "$RUNNER_TEMP/core-dist" --arch '${{ matrix.arch }}'
         env:
           GOEXPERIMENT: jsonv2
+      - name: Build the pinned test-only subscription client
+        run: python3 scripts/build_test_client.py --output "$RUNNER_TEMP/mihomo-client"
       - name: Verify SOCKS egress with the built runtime
         run: |
+          python3 tests/runtime_vless.py "$RUNNER_TEMP/core-dist/V2bX" "$RUNNER_TEMP/mihomo-client"
           python3 tests/runtime_xray.py "$RUNNER_TEMP/core-dist/V2bX"
           python3 tests/runtime_xray.py "$RUNNER_TEMP/core-dist/V2bX" sing
           python3 tests/runtime_config.py "$RUNNER_TEMP/core-dist/V2bX"

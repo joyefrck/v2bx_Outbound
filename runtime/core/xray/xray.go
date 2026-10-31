@@ -7,6 +7,7 @@ import (
 
 	"encoding/json/v2"
 
+	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/conf"
 	vCore "github.com/InazumaV/V2bX/core"
 	"github.com/InazumaV/V2bX/core/xray/app/dispatcher"
@@ -39,6 +40,7 @@ type Xray struct {
 	dispatcher                *dispatcher.DefaultDispatcher
 	users                     *UserMap
 	nodeReportMinTrafficBytes map[string]int64
+	retiredTraffic            map[string][]panel.UserTraffic
 }
 
 type UserMap struct {
@@ -53,6 +55,7 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 			uidMap: make(map[string]int),
 		},
 		nodeReportMinTrafficBytes: make(map[string]int64),
+		retiredTraffic:            make(map[string][]panel.UserTraffic),
 	}, nil
 }
 

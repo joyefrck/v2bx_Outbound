@@ -51,6 +51,15 @@ type HttpupgradeNetworkConfig struct {
 }
 
 func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (option.Inbound, error) {
+	if info.Type == "vless" {
+		decryption, err := info.VAllss.VLESSDecryption()
+		if err != nil {
+			return option.Inbound{}, err
+		}
+		if decryption != "none" || info.VAllss.Network == "xhttp" || info.VAllss.Network == "splithttp" {
+			return option.Inbound{}, fmt.Errorf("VLESS encryption and XHTTP require the Xray core")
+		}
+	}
 	addr, err := netip.ParseAddr(c.ListenIP)
 	if err != nil {
 		return option.Inbound{}, fmt.Errorf("the listen ip not vail")
@@ -394,6 +403,11 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 		}
 	}
 	return in, nil
+}
+
+func (b *Sing) ValidateNode(tag string, info *panel.NodeInfo, config *conf.Options) error {
+	_, err := getInboundOptions(tag, info, config)
+	return err
 }
 
 func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) error {

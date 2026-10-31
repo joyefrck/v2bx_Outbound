@@ -47,6 +47,7 @@ func NewXrayConfig() *XrayConfig {
 }
 
 type XrayOptions struct {
+	AllowPrivateNetwork bool                    `json:"AllowPrivateNetwork"`
 	EnableProxyProtocol bool                    `json:"EnableProxyProtocol"`
 	EnableDNS           bool                    `json:"EnableDNS"`
 	DNSType             string                  `json:"DNSType"`

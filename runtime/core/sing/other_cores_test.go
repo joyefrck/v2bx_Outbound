@@ -44,6 +44,7 @@ func TestOtherCores(t *testing.T) {
 				info.Security = panel.Tls
 			}
 			cfg := &conf.Options{ListenIP: "127.0.0.1", SendIP: "0.0.0.0", XrayOptions: conf.NewXrayOptions(), CertConfig: cert}
+			cfg.XrayOptions.AllowPrivateNetwork = true
 			var server vCore.Core
 			if proto == "hysteria2" {
 				server, err = hy2.New(&conf.CoreConfig{Hysteria2Config: conf.NewHysteria2Config()})

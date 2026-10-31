@@ -2,82 +2,132 @@ package xray
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"net"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
-	"encoding/json"
-
 	"github.com/InazumaV/V2bX/api/panel"
-	log "github.com/sirupsen/logrus"
+	"github.com/InazumaV/V2bX/conf"
 	coreConf "github.com/xtls/xray-core/infra/conf"
 )
 
-func updateDNSConfig(node *panel.NodeInfo) (err error) {
-	dnsPath := os.Getenv("XRAY_DNS_PATH")
-	if len(node.RawDNS.DNSJson) != 0 {
-		var prettyJSON bytes.Buffer
-		if err := json.Indent(&prettyJSON, node.RawDNS.DNSJson, "", " "); err != nil {
-			return err
+func compileDNSConfig(raw panel.RawDNS) ([]byte, error) {
+	var data []byte
+	if len(raw.DNSJson) != 0 {
+		var formatted bytes.Buffer
+		if err := json.Indent(&formatted, raw.DNSJson, "", " "); err != nil {
+			return nil, errors.New("invalid panel DNS JSON")
 		}
-		err = saveDnsConfig(prettyJSON.Bytes(), dnsPath)
-	} else if len(node.RawDNS.DNSMap) != 0 {
-		dnsConfig := DNSConfig{
-			Servers: []interface{}{
-				"https+local://1.1.1.1/dns-query",
-				"https+local://8.8.8.8/dns-query"},
-			Tag: "dns_inbound",
+		data = formatted.Bytes()
+	} else if len(raw.DNSMap) != 0 {
+		config := DNSConfig{Servers: []interface{}{"https+local://1.1.1.1/dns-query", "https+local://8.8.8.8/dns-query"}, Tag: "dns_inbound"}
+		keys := make([]string, 0, len(raw.DNSMap))
+		for key := range raw.DNSMap {
+			keys = append(keys, key)
 		}
-		for _, value := range node.RawDNS.DNSMap {
-			address := value["address"].(string)
-			if strings.Contains(address, ":") && !strings.Contains(address, "/") {
+		slices.Sort(keys)
+		for _, key := range keys {
+			value := make(map[string]interface{})
+			for k, v := range raw.DNSMap[key] {
+				value[k] = v
+			}
+			address, ok := value["address"].(string)
+			if !ok {
+				return nil, errors.New("invalid panel DNS address")
+			}
+			if strings.Contains(address, ":") && !strings.Contains(address, "/") && net.ParseIP(address) == nil {
 				host, port, err := net.SplitHostPort(address)
 				if err != nil {
-					return err
+					return nil, errors.New("invalid panel DNS endpoint")
 				}
-				var uint16Port uint16
-				if port, err := strconv.ParseUint(port, 10, 16); err == nil {
-					uint16Port = uint16(port)
+				number, err := strconv.ParseUint(port, 10, 16)
+				if err != nil || number == 0 {
+					return nil, errors.New("invalid panel DNS port")
 				}
-				value["address"] = host
-				value["port"] = uint16Port
+				value["address"], value["port"] = host, uint16(number)
 			}
-			dnsConfig.Servers = append(dnsConfig.Servers, value)
-
+			config.Servers = append(config.Servers, value)
 		}
-		dnsConfigJSON, err := json.MarshalIndent(dnsConfig, "", "  ")
+		var err error
+		data, err = json.MarshalIndent(config, "", "  ")
 		if err != nil {
-			log.WithField("err", err).Error("Error marshaling dnsConfig to JSON")
-			return err
+			return nil, errors.New("invalid panel DNS configuration")
 		}
-		err = saveDnsConfig(dnsConfigJSON, dnsPath)
+	} else {
+		return nil, nil
 	}
-	return err
+	config := &coreConf.DNSConfig{}
+	if err := json.Unmarshal(data, config); err != nil {
+		return nil, errors.New("invalid panel DNS configuration")
+	}
+	if _, err := config.Build(); err != nil {
+		return nil, errors.New("invalid panel DNS configuration")
+	}
+	return data, nil
 }
 
-func saveDnsConfig(dns []byte, dnsPath string) (err error) {
-	currentData, err := os.ReadFile(dnsPath)
-	if err != nil {
-		log.WithField("err", err).Error("Failed to read XRAY_DNS_PATH")
+func updateDNSConfig(node *panel.NodeInfo) error {
+	data, err := compileDNSConfig(node.RawDNS)
+	if err != nil || data == nil {
 		return err
 	}
-	if !bytes.Equal(currentData, dns) {
-		coreDnsConfig := &coreConf.DNSConfig{}
-		if err = json.Unmarshal(dns, coreDnsConfig); err != nil {
-			log.WithField("err", err).Error("Failed to unmarshal DNS config")
-		}
-		_, err := coreDnsConfig.Build()
-		if err != nil {
-			log.WithField("err", err).Error("Failed to understand DNS config, Please check: https://xtls.github.io/config/dns.html for help")
-			return err
-		}
-		if err = os.Truncate(dnsPath, 0); err != nil {
-			log.WithField("err", err).Error("Failed to clear XRAY DNS PATH file")
-		}
-		if err = os.WriteFile(dnsPath, dns, 0644); err != nil {
-			log.WithField("err", err).Error("Failed to write DNS to XRAY DNS PATH file")
-		}
+	return saveDnsConfig(data, os.Getenv("XRAY_DNS_PATH"))
+}
+
+func saveDnsConfig(data []byte, path string) error {
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return err
 	}
-	return err
+	if bytes.Equal(current, data) {
+		return nil
+	}
+	return writeDNSConfig(path, data)
+}
+
+func writeDNSConfig(path string, data []byte) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(resolved), ".v2bx-dns-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if err := file.Chmod(info.Mode().Perm()); err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), resolved)
+}
+
+func (c *Xray) SnapshotNodeState(_ string, _ *panel.NodeInfo, _ *conf.Options) (func() error, error) {
+	path := os.Getenv("XRAY_DNS_PATH")
+	if path == "" {
+		return func() error { return nil }, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return func() error { return writeDNSConfig(path, data) }, nil
 }

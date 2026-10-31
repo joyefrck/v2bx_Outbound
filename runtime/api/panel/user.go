@@ -44,13 +44,14 @@ func (c *Client) GetUserList() ([]UserInfo, error) {
 	defer r.RawResponse.Body.Close()
 
 	if r.StatusCode() == 304 {
+		c.pendingUserEtag = c.userEtag
 		return nil, nil
 	}
 
 	if err = c.checkResponse(r, path, err); err != nil {
 		return nil, err
 	}
-	userlist := &UserListBody{}
+	userlist := &UserListBody{Users: make([]UserInfo, 0)}
 	if strings.Contains(r.Header().Get("Content-Type"), "application/x-msgpack") {
 		decoder := msgpack.NewDecoder(r.RawResponse.Body)
 		if err := decoder.Decode(userlist); err != nil {
@@ -86,7 +87,7 @@ func (c *Client) GetUserList() ([]UserInfo, error) {
 			userlist.Users = append(userlist.Users, u)
 		}
 	}
-	c.userEtag = r.Header().Get("ETag")
+	c.pendingUserEtag = r.Header().Get("ETag")
 	return userlist.Users, nil
 }
 
@@ -152,4 +153,8 @@ func (c *Client) ReportNodeOnlineUsers(data *map[int][]string) error {
 	}
 
 	return nil
+}
+
+func (c *Client) AcceptUserList() {
+	c.userEtag = c.pendingUserEtag
 }

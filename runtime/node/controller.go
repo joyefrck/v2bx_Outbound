@@ -3,6 +3,7 @@ package node
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/task"
@@ -13,6 +14,8 @@ import (
 )
 
 type Controller struct {
+	stateMu                   sync.Mutex
+	pendingTraffic            []panel.UserTraffic
 	server                    vCore.Core
 	apiClient                 *panel.Client
 	tag                       string
@@ -72,6 +75,12 @@ func (c *Controller) Start() error {
 		return fmt.Errorf("update rule error: %s", err)
 	}
 	c.limiter = l
+	started := false
+	defer func() {
+		if !started {
+			limiter.DeleteLimiter(c.tag)
+		}
+	}()
 	if node.Security == panel.Tls {
 		err = c.requestCert()
 		if err != nil {
@@ -79,6 +88,31 @@ func (c *Controller) Start() error {
 		}
 	}
 	// Add new tag
+	if node.Type == "vless" {
+		validator, ok := c.server.(vCore.NodeValidator)
+		if !ok {
+			return errors.New("selected core does not provide VLESS preflight")
+		}
+		if err := validator.ValidateNode(c.tag, node, c.Options); err != nil {
+			return fmt.Errorf("VLESS preflight failed: %w", err)
+		}
+	}
+	unlock := vCore.LockNodeUpdates()
+	defer unlock()
+	restore := func() error { return nil }
+	if snapshotter, ok := c.server.(vCore.NodeStateSnapshotter); ok {
+		restore, err = snapshotter.SnapshotNodeState(c.tag, node, c.Options)
+		if err != nil {
+			return errors.New("cannot snapshot initial node state")
+		}
+	}
+	defer func() {
+		if !started {
+			if err := restore(); err != nil {
+				log.WithField("tag", c.tag).Error("initial node state restoration failed")
+			}
+		}
+	}()
 	err = c.server.AddNode(c.tag, node, c.Options)
 	if err != nil {
 		return fmt.Errorf("add new node error: %s", err)
@@ -89,17 +123,21 @@ func (c *Controller) Start() error {
 		NodeInfo: node,
 	})
 	if err != nil {
+		_ = c.server.DelNode(c.tag)
 		return fmt.Errorf("add users error: %s", err)
 	}
 	log.WithField("tag", c.tag).Infof("Added %d new users", added)
 	c.info = node
+	c.apiClient.AcceptNodeInfo(node)
+	c.apiClient.AcceptUserList()
+	started = true
+	unlock()
 	c.startTasks(node)
 	return nil
 }
 
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
-	limiter.DeleteLimiter(c.tag)
 	if c.nodeInfoMonitorPeriodic != nil {
 		c.nodeInfoMonitorPeriodic.Close()
 	}
@@ -115,6 +153,9 @@ func (c *Controller) Close() error {
 	if c.onlineIpReportPeriodic != nil {
 		c.onlineIpReportPeriodic.Close()
 	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	limiter.DeleteLimiter(c.tag)
 	err := c.server.DelNode(c.tag)
 	if err != nil {
 		return fmt.Errorf("del node error: %s", err)

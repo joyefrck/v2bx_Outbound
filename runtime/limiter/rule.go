@@ -1,6 +1,7 @@
 package limiter
 
 import (
+	"errors"
 	"regexp"
 
 	"github.com/InazumaV/V2bX/api/panel"
@@ -28,10 +29,15 @@ func (l *Limiter) CheckProtocolRule(protocol string) (reject bool) {
 }
 
 func (l *Limiter) UpdateRule(rule *panel.Rules) error {
-	l.DomainRules = make([]*regexp.Regexp, len(rule.Regexp))
+	compiled := make([]*regexp.Regexp, len(rule.Regexp))
 	for i := range rule.Regexp {
-		l.DomainRules[i] = regexp.MustCompile(rule.Regexp[i])
+		value, err := regexp.Compile(rule.Regexp[i])
+		if err != nil {
+			return errors.New("invalid domain rule expression")
+		}
+		compiled[i] = value
 	}
-	l.ProtocolRules = rule.Protocol
+	l.DomainRules = compiled
+	l.ProtocolRules = append([]string(nil), rule.Protocol...)
 	return nil
 }

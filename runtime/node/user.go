@@ -8,18 +8,12 @@ import (
 )
 
 func (c *Controller) reportUserTrafficTask() (err error) {
-	userTraffic, _ := c.server.GetUserTrafficSlice(c.tag, true)
-	if len(userTraffic) > 0 {
-		err = c.apiClient.ReportUserTraffic(userTraffic)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"tag": c.tag,
-				"err": err,
-			}).Info("Report user traffic failed")
-		} else {
-			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(userTraffic))
-			log.WithField("tag", c.tag).Debugf("User traffic: %+v", userTraffic)
-		}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	userTraffic, err := c.flushUserTraffic()
+	if err != nil {
+		log.WithField("tag", c.tag).Error("Report user traffic failed")
+		return nil
 	}
 
 	if onlineDevice, err := c.limiter.GetOnlineDevice(); err != nil {

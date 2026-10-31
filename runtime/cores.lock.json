@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "version": "v1.0.2",
-  "tag": "core-v1.0.2",
-  "go": "go1.26.1",
+  "version": "v1.1.0",
+  "tag": "core-v1.1.0",
+  "go": "go1.27.3",
   "tags": [
     "sing",
     "xray",
@@ -17,11 +17,11 @@
   "modules": {
     "xray": {
       "path": "github.com/xtls/xray-core",
-      "version": "v1.260327.0",
-      "tag": "v26.3.27",
+      "version": "v1.260327.1-0.20261031132019-a4a3dff5b20c",
+      "tag": "v26.10.31",
       "repository": "XTLS/Xray-core",
-      "sum": "h1:g4TzxMwyPrxslZh6uD+FiG3lXKTrnNO+b4ky2OhogHE=",
-      "commit": "d2758a023cd7f4174a5a5fa4ff66e487d4342ba0"
+      "sum": "h1:XijTasBJ2fImHZo1GoAgSfHuDqloQGYHEADLy9CgrJ8=",
+      "commit": "a4a3dff5b20c2faae567b742c172c7b95e75c083"
     },
     "sing-box": {
       "path": "github.com/sagernet/sing-box",
@@ -48,7 +48,7 @@
       "commit": "619a6f856b69fb7ee6a7a379e810e68b84004605"
     }
   },
-  "patch_index_sha256": "0e04543de73152defa9b98718516fafb224b0b28dce06f84257538accf58bd3b",
+  "patch_index_sha256": "5bd34d34f1d023aab43396bc32094d014eebcdef5955249cab458952440d781d",
   "platforms": [
     "linux-amd64",
     "linux-arm64"
