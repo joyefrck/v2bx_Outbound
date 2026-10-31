@@ -187,5 +187,19 @@
     "replacement": "anytls/session/stream.go",
     "upstream_sha256": "1f7ebfeb99ab5b0857d007dfedf664a667ef513aa3c95637ee58e86569a972d3",
     "sha256": "835fecc7efced240e2b24c1b2cb9033a040e7a4df36b9c5518d00516836a70ad"
+  },
+  {
+    "module": "github.com/anytls/sing-anytls@v0.0.11",
+    "path": "session/session.go",
+    "replacement": "anytls/session/session.go",
+    "upstream_sha256": "14e27f2cca6118a3025b1875ffe8963d2fe840f5554bd2ff4464dd0a5f162fb8",
+    "sha256": "b435d6063564f4e59f2293dde6080ee0759a3c6c5e1dc314665e3e3d1aaf8861"
+  },
+  {
+    "module": "github.com/anytls/sing-anytls@v0.0.11",
+    "path": "session/client.go",
+    "replacement": "anytls/session/client.go",
+    "upstream_sha256": "6ece60c575b6b654ae29dada879f4d273dc4befa7b88ae07bdf204d1e8a9d740",
+    "sha256": "68341025a30ecae3039cb5e0ba4f00fda170b66be9e03226d07b32d49e6020ea"
   }
 ]

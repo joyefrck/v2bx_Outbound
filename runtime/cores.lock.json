@@ -48,7 +48,7 @@
       "commit": "619a6f856b69fb7ee6a7a379e810e68b84004605"
     }
   },
-  "patch_index_sha256": "5bd34d34f1d023aab43396bc32094d014eebcdef5955249cab458952440d781d",
+  "patch_index_sha256": "c89ef5e453bfeb8b8b5bfa61d57d699fbaf127fcf4158435677a78554244b0d0",
   "platforms": [
     "linux-amd64",
     "linux-arm64"

@@ -42,6 +42,7 @@ Go 最小版本选择导致的间接依赖更新记录在 `runtime/go.mod` / `go
 - 上游移除了 Xray `allowInsecure` 和 Shadowsocks `none/plain`。已有自定义 Xray 出站使用这些字段时，
   应在升级前迁移到证书固定/验证名称或受支持的加密方式；不要关闭预检查绕过不兼容配置。
 - TLS VLESS 节点必须配置有效证书文件，缺少证书不会退化为明文监听。
+- AnyTLS 客户端在 stream 加入会话前初始化回收回调，避免认证失败时与会话关闭并发读写回调。
 - ECH 本批暂缓。增强节点先在独立测试端口验证实际客户端，再启用；不要覆盖现有节点的密钥与协议。
 
 双架构 CI 继续执行脚本、Go/race、SOCKS、HY2、VLESS 真实进程和 systemd 更新事务测试。

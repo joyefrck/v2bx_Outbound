@@ -231,6 +231,20 @@ func TestManagedProtocols(t *testing.T) {
 				c.Close()
 				t.Fatal("deleted user connected")
 			}
+			if proto == "anytls" {
+				var rejectedRequests sync.WaitGroup
+				for i := 0; i < 32; i++ {
+					rejectedRequests.Add(1)
+					go func() {
+						defer rejectedRequests.Done()
+						if c, e := exchange(rejected, target.Addr().String()); e == nil {
+							c.Close()
+							t.Error("deleted AnyTLS user connected during concurrent cleanup")
+						}
+					}()
+				}
+				rejectedRequests.Wait()
+			}
 			report, err := server.GetUserTrafficSlice(name, true)
 			if err != nil {
 				t.Fatal(err)
